@@ -1,0 +1,35 @@
+-- Test flow/saga execution with rollback
+
+ns saga_test
+
+fn validate_order(total: Int) -> Result[Int, Text]
+  require total > 0
+  if total > 10000 then Err("order too large") else Ok(total)
+
+fn charge_payment(amount: Int) -> Result[Int, Text]
+  if amount > 5000 then Err("payment declined") else Ok(amount)
+
+fn create_receipt(amount: Int) -> Int
+  amount
+
+flow checkout(total: Int) -> Result[Int, Text]
+  require total > 0
+  effect Db.write
+
+  step validate =
+    validate_order(total)?
+    rollback: nothing
+
+  step charge =
+    charge_payment(validate_result)?
+    rollback: nothing
+
+  step receipt =
+    create_receipt(charge_result)
+    rollback: nothing
+
+main with [ProductionHandler]
+  let result = checkout(100)
+  match result
+    Ok(val) -> val
+    Err(msg) -> 0

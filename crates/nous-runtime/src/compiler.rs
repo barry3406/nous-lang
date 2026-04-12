@@ -127,7 +127,7 @@ impl CompilerCtx {
         for spanned in &program.declarations {
             match &spanned.node {
                 Decl::Fn(fn_decl) => self.compile_fn(fn_decl)?,
-                Decl::Flow(flow_decl) => self.compile_flow_stub(flow_decl)?,
+                Decl::Flow(flow_decl) => self.compile_flow(flow_decl)?,
                 Decl::Main(main_decl) => {
                     self.compile_main_body(&main_decl.body)?;
                 }
@@ -167,10 +167,9 @@ impl CompilerCtx {
         self.compile_expr(&mut chunk, &mut scope, &decl.body.node)?;
 
         // Emit runtime `ensure` checks after the body expression.  The body
-        // result sits on top of the stack; we duplicate it for each check.
-        // TODO: proper `ensure` result access — for now each CheckEnsure pops
-        // a bool produced by the body (works only for boolean-returning fns).
-        self.emit_ensure_checks(&mut chunk, &scope, &decl.contract)?;
+        // result is stored in a `result` local; ensure predicates may reference
+        // it by name.  The result is restored to the stack before Return.
+        self.emit_ensure_checks(&mut chunk, &mut scope, &decl.contract)?;
 
         chunk.emit(Op::Return);
         chunk.local_count = scope.next_slot;
@@ -179,8 +178,12 @@ impl CompilerCtx {
         Ok(())
     }
 
-    fn compile_flow_stub(&mut self, decl: &FlowDecl) -> Result<(), CompileError> {
-        // TODO: flow compilation — steps, rollback, saga semantics
+    /// Compile a flow declaration with saga-pattern rollback semantics.
+    ///
+    /// Each step's body is executed in sequence. If any step produces an Err,
+    /// the flow jumps to a rollback chain that executes all completed steps'
+    /// rollback expressions in reverse order, then returns the original error.
+    fn compile_flow(&mut self, decl: &FlowDecl) -> Result<(), CompileError> {
         let chunk_idx = self
             .fns
             .lookup(&decl.name)
@@ -188,12 +191,93 @@ impl CompilerCtx {
                 message: format!("flow `{}` not registered in first pass", decl.name),
             })?;
 
+        let mut scope = Scope::default();
+        for param in &decl.params {
+            scope.define(&param.name);
+        }
+
         let mut chunk = Chunk::new(&decl.name);
-        // Placeholder: immediately return Void until flow is implemented.
-        let void_idx = chunk.add_constant(Value::Void);
-        chunk.emit(Op::LoadConst(void_idx));
+        chunk.local_count = scope.next_slot;
+
+        // Emit require checks
+        self.emit_require_checks(&mut chunk, &mut scope, &decl.contract)?;
+
+        // Reserve a slot to store the error value if a step fails
+        let error_slot = scope.define("_flow_error");
+        chunk.local_count = scope.next_slot;
+
+        let mut step_result_slots: Vec<usize> = Vec::new();
+        let mut error_jumps: Vec<usize> = Vec::new();
+
+        // === Compile each step ===
+        for step in &decl.steps {
+            // Compile step body
+            self.compile_expr(&mut chunk, &mut scope, &step.body.node)?;
+
+            // Check if result is Err
+            chunk.emit(Op::Dup);
+            chunk.emit(Op::IsErr);
+            let not_err = chunk.emit(Op::JumpIfFalse(0));
+
+            // Error path: store error, jump to rollback chain
+            chunk.emit(Op::StoreLocal(error_slot));
+            chunk.local_count = scope.next_slot;
+            let to_rollback = chunk.emit(Op::Jump(0));
+            error_jumps.push(to_rollback);
+
+            // Success path
+            chunk.patch_jump(not_err);
+
+            // If it's Ok, unwrap it
+            chunk.emit(Op::Dup);
+            chunk.emit(Op::IsOk);
+            let not_ok = chunk.emit(Op::JumpIfFalse(0));
+            chunk.emit(Op::UnwrapInner);
+            chunk.patch_jump(not_ok);
+
+            // Store result in named slot
+            let result_slot = scope.define(&format!("{}_result", step.name));
+            chunk.emit(Op::StoreLocal(result_slot));
+            chunk.local_count = scope.next_slot;
+            step_result_slots.push(result_slot);
+        }
+
+        // === Success: wrap last step's result in Ok and return ===
+        if let Some(&last_slot) = step_result_slots.last() {
+            chunk.emit(Op::LoadLocal(last_slot));
+            chunk.emit(Op::WrapOk);
+        } else {
+            let void_idx = chunk.add_constant(Value::Void);
+            chunk.emit(Op::LoadConst(void_idx));
+            chunk.emit(Op::WrapOk);
+        }
         chunk.emit(Op::Return);
 
+        // === Rollback chain ===
+        // Patch all error jumps to land here
+        for idx in &error_jumps {
+            chunk.patch_jump(*idx);
+        }
+
+        // Execute rollbacks in reverse
+        for step in decl.steps.iter().rev() {
+            match &step.rollback.node {
+                Expr::Void => {}
+                Expr::Ident(name) if name == "nothing" => {}
+                rollback_body => {
+                    self.compile_expr(&mut chunk, &mut scope, rollback_body)?;
+                    let discard = scope.define("_rb_discard");
+                    chunk.emit(Op::StoreLocal(discard));
+                    chunk.local_count = scope.next_slot;
+                }
+            }
+        }
+
+        // Return the original error
+        chunk.emit(Op::LoadLocal(error_slot));
+        chunk.emit(Op::Return);
+
+        chunk.local_count = scope.next_slot;
         self.module.chunks[chunk_idx] = chunk;
         Ok(())
     }
@@ -232,18 +316,36 @@ impl CompilerCtx {
     fn emit_ensure_checks(
         &self,
         chunk: &mut Chunk,
-        _scope: &Scope,
+        scope: &mut Scope,
         contract: &Contract,
     ) -> Result<(), CompileError> {
+        if contract.ensures.is_empty() {
+            return Ok(());
+        }
+
+        // The function body result sits on top of the stack.  Save it in a
+        // temp local so we can reload it for each ensure clause and restore
+        // it to the top afterwards.
+        let result_slot = scope.define("result");
+        chunk.emit(Op::StoreLocal(result_slot));
+        chunk.local_count = scope.next_slot;
+
         for ensure in &contract.ensures {
-            // TODO: full postcondition encoding requires access to pre-state
-            // and the function result.  For now we emit a placeholder that
-            // always passes (true constant) so the bytecode remains valid.
-            let true_idx = chunk.add_constant(Value::Bool(true));
-            chunk.emit(Op::LoadConst(true_idx));
+            // Reload the body result into the `result` slot so that any
+            // reference to `result` inside the ensure expression resolves
+            // to the function's return value.
+            chunk.emit(Op::LoadLocal(result_slot));
+            chunk.emit(Op::StoreLocal(result_slot));
+
+            // Compile the ensure predicate.  It may reference `result`.
+            self.compile_expr_into(chunk, scope, &ensure.node)?;
+
             let msg = format!("ensure violated: {}", expr_preview(&ensure.node));
             chunk.emit(Op::CheckEnsure(msg));
         }
+
+        // Restore the original body result back onto the stack for `Return`.
+        chunk.emit(Op::LoadLocal(result_slot));
         Ok(())
     }
 
@@ -591,11 +693,32 @@ impl CompilerCtx {
                     description: "lambda / closure".into(),
                 });
             }
-            Expr::Pipe { .. } => {
-                // TODO: pipe operator desugaring
-                return Err(CompileError::Unsupported {
-                    description: "pipe operator".into(),
+            Expr::Pipe { value, func, args } => {
+                // Desugar: `x |> f(a, b)` → `f(x, a, b)`,  `x |> f` → `f(x)`
+                let name = match &func.node {
+                    Expr::Ident(n) => n,
+                    _ => {
+                        return Err(CompileError::Unsupported {
+                            description: "non-identifier callee in pipe expression".into(),
+                        });
+                    }
+                };
+                if self.fns.lookup(name).is_none() {
+                    return Err(CompileError::UndefinedName { name: name.clone() });
+                }
+                let total_args = 1 + args.len();
+                let fn_val_idx = chunk.add_constant(Value::Fn {
+                    name: name.clone(),
+                    arity: total_args,
                 });
+                chunk.emit(Op::LoadConst(fn_val_idx));
+                // Push the left-hand side as the first argument.
+                self.compile_expr_into(chunk, scope, &value.node)?;
+                // Push any additional arguments.
+                for arg in args {
+                    self.compile_expr_into(chunk, scope, &arg.node)?;
+                }
+                chunk.emit(Op::Call(total_args));
             }
             Expr::Match { scrutinee, arms } => {
                 self.compile_match(chunk, scope, scrutinee, arms)?;

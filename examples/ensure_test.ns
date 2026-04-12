@@ -1,0 +1,17 @@
+-- Test ensure postconditions with result binding
+
+ns ensure_test
+
+fn double(x: Int) -> Int
+  ensure result == (x + x)
+  x * 2
+
+fn safe_abs(x: Int) -> Int
+  require x >= 0
+  ensure result >= 0
+  x
+
+main with [ProductionHandler]
+  let a = double(21)
+  let b = safe_abs(5)
+  a + b

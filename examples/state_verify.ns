@@ -1,0 +1,17 @@
+-- State Machine Verification Examples
+
+ns state_test
+
+-- Valid: all states reachable, terminals exist, no dead ends
+state OrderLifecycle
+  Pending -[confirm]-> Confirmed
+  Pending -[cancel]-> Cancelled
+  Confirmed -[ship]-> Shipped
+  Confirmed -[cancel]-> Cancelled
+  Shipped -[deliver]-> Delivered
+
+-- Invalid: Orphan is unreachable from Draft
+state BrokenWorkflow
+  Draft -[submit]-> Review
+  Review -[approve]-> Done
+  Orphan -[rescue]-> Done

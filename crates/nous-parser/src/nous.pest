@@ -62,11 +62,12 @@ enum_variant = { ident ~ ("(" ~ field_decl ~ ("," ~ field_decl)* ~ ")")? }
 
 // ── State machine ────────────────────────────────────
 state_decl = {
-    "state" ~ ident ~ BLOCK_START ~ transition+ ~ BLOCK_END
+    "state" ~ ident ~ BLOCK_START ~ (transition | terminal_state)+ ~ BLOCK_END
 }
 transition = {
     ident ~ "-[" ~ ident ~ transition_params? ~ "]->" ~ ident
 }
+terminal_state = { ident }
 transition_params = { "(" ~ param ~ ("," ~ param)* ~ ")" }
 
 // ── Effect declaration ───────────────────────────────
@@ -152,7 +153,7 @@ mul_expr     = { unary_expr ~ (mul_op ~ unary_expr)* }
 
 unary_expr = { neg_expr | not_expr | postfix_expr }
 neg_expr   = { "-" ~ postfix_expr }
-not_expr   = { "not" ~ postfix_expr }
+not_expr   = { "not" ~ !(ASCII_ALPHANUMERIC | "_") ~ postfix_expr }
 
 postfix_expr = { primary_expr ~ postfix_op* }
 postfix_op   = { field_access | call_args | try_op | prime_op }

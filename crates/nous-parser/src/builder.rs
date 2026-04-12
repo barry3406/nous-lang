@@ -141,6 +141,7 @@ fn build_enum(p: Pair<'_, Rule>) -> Result<Decl, ParseError> {
 fn build_state(p: Pair<'_, Rule>) -> Result<Decl, ParseError> {
     let mut inner = content(p);
     let name = ident_str(&mut inner);
+    // terminal_state entries are informational — verifier discovers them from transition graph
     let transitions = inner
         .filter(|c| c.as_rule() == Rule::transition)
         .map(|t| {

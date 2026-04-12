@@ -1,5 +1,7 @@
+use std::collections::{HashMap, HashSet, VecDeque};
+
 use nous_ast::{Program, Span};
-use nous_ast::decl::{Contract, Decl, FnDecl, FlowDecl};
+use nous_ast::decl::{Contract, Decl, FnDecl, FlowDecl, StateDecl};
 use nous_ast::expr::Expr;
 
 use crate::error::VerifyError;
@@ -105,6 +107,7 @@ impl Verifier {
                     );
                 }
             }
+            Decl::State(state_decl) => self.verify_state_machine(state_decl, span),
             // Other declarations do not carry contracts yet.
             _ => {}
         }
@@ -122,6 +125,123 @@ impl Verifier {
         // Also inspect each step body for nested requires.
         for step in &decl.steps {
             self.collect_inline_requires(&decl.name, &step.body.node, step.body.span);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // State machine verification
+    // -----------------------------------------------------------------------
+
+    /// Verify structural properties of a state machine declaration.
+    ///
+    /// Four checks are performed in one pass over the transition list:
+    ///
+    /// 1. **Completeness** – every state that appears as a `from` source has at
+    ///    least one outgoing transition (by definition, if it appears as `from` it
+    ///    does). Pure `to`-only states with no outgoing transitions are classified
+    ///    as *terminal* and are allowed to have no outgoing edges.
+    ///
+    /// 2. **Reachability** – BFS from the initial state (the `from` of the very
+    ///    first transition) to find every reachable state. Any state that is
+    ///    mentioned in the machine but is never reached raises `E201_UNREACHABLE_STATE`.
+    ///
+    /// 3. **Liveness** – reverse BFS from every terminal state. Any non-terminal
+    ///    state that cannot reach a terminal state raises `E203_LIVENESS_VIOLATION`.
+    ///
+    /// 4. **Dead actions** – an action whose `from` state is unreachable is itself
+    ///    dead and raises `W202_DEAD_ACTION`.
+    fn verify_state_machine(&mut self, decl: &StateDecl, span: Span) {
+        let machine = &decl.name;
+
+        if decl.transitions.is_empty() {
+            // A state machine with no transitions is trivially valid (and useless).
+            return;
+        }
+
+        // ── Collect the universe of state names ───────────────────────────────
+        // `from_states` — states with outgoing transitions.
+        // `to_states`   — states that are targets of at least one transition.
+        // All states = from_states ∪ to_states.
+        let mut from_states: HashSet<&str> = HashSet::new();
+        let mut to_states: HashSet<&str> = HashSet::new();
+
+        // Forward adjacency: state → list of reachable states.
+        let mut forward: HashMap<&str, Vec<&str>> = HashMap::new();
+        // Reverse adjacency for liveness BFS: state → states that transition here.
+        let mut reverse: HashMap<&str, Vec<&str>> = HashMap::new();
+
+        for t in &decl.transitions {
+            from_states.insert(&t.from);
+            to_states.insert(&t.to);
+            forward.entry(&t.from).or_default().push(&t.to);
+            reverse.entry(&t.to).or_default().push(&t.from);
+        }
+
+        let all_states: HashSet<&str> = from_states.union(&to_states).copied().collect();
+
+        // Terminal states: appear as `to` targets but never as `from` source —
+        // they have no outgoing transitions.
+        let terminal_states: HashSet<&str> = to_states
+            .difference(&from_states)
+            .copied()
+            .collect();
+
+        // Initial state: the `from` of the first transition in source order.
+        let initial_state: &str = &decl.transitions[0].from;
+
+        // ── Check 2: Forward reachability via BFS from initial state ──────────
+        let reachable = bfs_reachable(initial_state, &forward, &all_states);
+
+        let mut unreachable_states: HashSet<&str> = all_states
+            .difference(&reachable)
+            .copied()
+            .collect();
+
+        // The initial state is always reachable (it's the starting point).
+        unreachable_states.remove(initial_state);
+
+        for state in &unreachable_states {
+            self.diagnostics.push(
+                crate::diagnostic::Diagnostic::state_unreachable(machine, state, span),
+            );
+        }
+
+        // ── Check 4: Dead actions (actions whose `from` is unreachable) ───────
+        for t in &decl.transitions {
+            if unreachable_states.contains(t.from.as_str()) {
+                self.diagnostics.push(
+                    crate::diagnostic::Diagnostic::dead_action(
+                        machine,
+                        &t.action,
+                        &t.from,
+                        span,
+                    ),
+                );
+            }
+        }
+
+        // ── Check 3: Liveness — reverse BFS from every terminal state ─────────
+        // States that can reach a terminal state.
+        let can_terminate = bfs_reachable_multi(&terminal_states, &reverse, &all_states);
+
+        for state in &all_states {
+            // Only non-terminal, reachable states are subject to liveness.
+            if terminal_states.contains(state) {
+                continue;
+            }
+            if unreachable_states.contains(state) {
+                // Already reported as unreachable; skip to avoid duplicate noise.
+                continue;
+            }
+            if !can_terminate.contains(state) {
+                self.diagnostics.push(
+                    crate::diagnostic::Diagnostic::state_liveness_violation(
+                        machine,
+                        state,
+                        span,
+                    ),
+                );
+            }
         }
     }
 
@@ -309,6 +429,68 @@ impl Default for Verifier {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// ---------------------------------------------------------------------------
+// Graph utilities for state-machine analysis
+// ---------------------------------------------------------------------------
+
+/// BFS from a single `start` node along `adj` edges.
+///
+/// Only visits nodes that exist in `universe` (guards against orphaned edge
+/// references). Returns the set of all reachable nodes (including `start`).
+fn bfs_reachable<'a>(
+    start: &'a str,
+    adj: &HashMap<&'a str, Vec<&'a str>>,
+    universe: &HashSet<&'a str>,
+) -> HashSet<&'a str> {
+    let mut visited: HashSet<&str> = HashSet::new();
+    let mut queue: VecDeque<&str> = VecDeque::new();
+
+    if universe.contains(start) {
+        visited.insert(start);
+        queue.push_back(start);
+    }
+
+    while let Some(node) = queue.pop_front() {
+        if let Some(neighbours) = adj.get(node) {
+            for &next in neighbours {
+                if universe.contains(next) && visited.insert(next) {
+                    queue.push_back(next);
+                }
+            }
+        }
+    }
+
+    visited
+}
+
+/// BFS from *multiple* start nodes simultaneously (used for reverse liveness).
+fn bfs_reachable_multi<'a>(
+    starts: &HashSet<&'a str>,
+    adj: &HashMap<&'a str, Vec<&'a str>>,
+    universe: &HashSet<&'a str>,
+) -> HashSet<&'a str> {
+    let mut visited: HashSet<&str> = HashSet::new();
+    let mut queue: VecDeque<&str> = VecDeque::new();
+
+    for &s in starts {
+        if universe.contains(s) && visited.insert(s) {
+            queue.push_back(s);
+        }
+    }
+
+    while let Some(node) = queue.pop_front() {
+        if let Some(neighbours) = adj.get(node) {
+            for &next in neighbours {
+                if universe.contains(next) && visited.insert(next) {
+                    queue.push_back(next);
+                }
+            }
+        }
+    }
+
+    visited
 }
 
 // ---------------------------------------------------------------------------

@@ -184,6 +184,83 @@ impl Diagnostic {
         }
     }
 
+    /// Create a dead (unreachable-action) diagnostic.
+    ///
+    /// Emitted when an action can never be triggered because its `from` state
+    /// is itself unreachable from the initial state.
+    pub fn dead_action(
+        machine_name: &str,
+        action: &str,
+        from_state: &str,
+        span: Span,
+    ) -> Self {
+        Self {
+            level: DiagLevel::Warning,
+            code: "W202_DEAD_ACTION".to_string(),
+            constraint: format!(
+                "action `{action}` in state `{from_state}` is unreachable"
+            ),
+            kind: ConstraintKind::StateTransition,
+            counterexample: None,
+            location: DiagLocation {
+                ns: None,
+                fn_name: machine_name.to_string(),
+                span,
+                call_site: None,
+            },
+            fix_strategies: vec![
+                FixStrategy {
+                    strategy_type: FixType::SplitState,
+                    description: format!(
+                        "Add a transition leading to `{from_state}`, or remove \
+                         action `{action}`"
+                    ),
+                    at: "state_declaration".to_string(),
+                    code: None,
+                },
+            ],
+            related_constraints: vec![],
+        }
+    }
+
+    /// Create a liveness-violation diagnostic.
+    ///
+    /// Emitted when a non-terminal state cannot reach any terminal state, meaning
+    /// the machine can get permanently stuck there.
+    pub fn state_liveness_violation(
+        machine_name: &str,
+        state_name: &str,
+        span: Span,
+    ) -> Self {
+        Self {
+            level: DiagLevel::Error,
+            code: "E203_LIVENESS_VIOLATION".to_string(),
+            constraint: format!(
+                "non-terminal state `{state_name}` cannot reach any terminal state"
+            ),
+            kind: ConstraintKind::StateTransition,
+            counterexample: None,
+            location: DiagLocation {
+                ns: None,
+                fn_name: machine_name.to_string(),
+                span,
+                call_site: None,
+            },
+            fix_strategies: vec![
+                FixStrategy {
+                    strategy_type: FixType::SplitState,
+                    description: format!(
+                        "Add a path from `{state_name}` to a terminal state, or \
+                         declare it terminal (remove all outgoing transitions)"
+                    ),
+                    at: "state_declaration".to_string(),
+                    code: None,
+                },
+            ],
+            related_constraints: vec![],
+        }
+    }
+
     /// Create a missing effect declaration diagnostic.
     pub fn undeclared_effect(
         fn_name: &str,
