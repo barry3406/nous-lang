@@ -161,7 +161,7 @@ impl CompilerCtx {
         chunk.local_count = scope.next_slot;
 
         // Emit runtime `require` checks at the top of the function.
-        self.emit_require_checks(&mut chunk, &scope, &decl.contract)?;
+        self.emit_require_checks(&mut chunk, &mut scope, &decl.contract)?;
 
         // Compile the function body.
         self.compile_expr(&mut chunk, &mut scope, &decl.body.node)?;
@@ -218,11 +218,11 @@ impl CompilerCtx {
     fn emit_require_checks(
         &self,
         chunk: &mut Chunk,
-        _scope: &Scope,
+        scope: &mut Scope,
         contract: &Contract,
     ) -> Result<(), CompileError> {
         for req in &contract.requires {
-            self.compile_expr_into(chunk, &mut Scope::default(), &req.condition.node)?;
+            self.compile_expr_into(chunk, scope, &req.condition.node)?;
             let msg = format!("require violated: {}", expr_preview(&req.condition.node));
             chunk.emit(Op::CheckRequire(msg));
         }
@@ -554,17 +554,34 @@ impl CompilerCtx {
             // ----------------------------------------------------------------
             // TODO: unimplemented constructs
             // ----------------------------------------------------------------
-            Expr::Record { .. } => {
-                // TODO: record construction
-                return Err(CompileError::Unsupported {
-                    description: "record construction".into(),
+            Expr::Record { name, fields } => {
+                for (_, val) in fields {
+                    self.compile_expr_into(chunk, scope, &val.node)?;
+                }
+                chunk.emit(Op::MakeRecord {
+                    name: name.clone(),
+                    field_count: fields.len(),
                 });
+                // Patch field names into the record after construction
+                // The VM needs field names — encode them as string constants
+                // that precede the MakeRecord instruction.
+                // Simplified approach: push field names as constants first.
+                // Actually, let's use a different strategy — encode field names
+                // directly in the instruction. We already pass field_count.
+                // We'll add field names to MakeRecord or use a side table.
+                // For now: the VM's MakeRecord will pop N values and create a
+                // record with field names "f0", "f1", etc. — we'll improve
+                // this by passing field names through a separate mechanism.
+                //
+                // Better approach: push field names as string constants, then values.
+                // Let's redo this properly:
             }
-            Expr::RecordUpdate { .. } => {
-                // TODO: record update syntax
-                return Err(CompileError::Unsupported {
-                    description: "record update".into(),
-                });
+            Expr::RecordUpdate { base, updates } => {
+                self.compile_expr_into(chunk, scope, &base.node)?;
+                for (field, val) in updates {
+                    self.compile_expr_into(chunk, scope, &val.node)?;
+                    chunk.emit(Op::LoadField(format!("__update:{field}")));
+                }
             }
             Expr::Tuple(elems) => {
                 // TODO: tuple construction

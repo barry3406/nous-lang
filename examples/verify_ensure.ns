@@ -1,0 +1,18 @@
+-- Test Z3 verification of ensure postconditions
+
+ns verify_test
+
+fn absolute(x: Int) -> Int
+  require x >= 0
+  ensure result >= 0
+  x
+
+fn always_positive(x: Int) -> Int
+  ensure result > 0
+  x + 1
+
+fn conservation(a: Int, b: Int, transfer: Int) -> Int
+  require transfer >= 0
+  require a >= transfer
+  ensure (a - transfer) + (b + transfer) == a + b
+  a - transfer

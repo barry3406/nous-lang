@@ -1,0 +1,16 @@
+-- Test runtime contract enforcement
+
+ns contracts
+
+fn safe_divide(a: Int, b: Int) -> Int
+  require b /= 0
+  a / b
+
+fn clamp(value: Int, min: Int, max: Int) -> Int
+  require min <= max
+  if value < min then min else if value > max then max else value
+
+main with [ProductionHandler]
+  let x = safe_divide(100, 5)
+  let y = clamp(150, 0, 100)
+  x + y

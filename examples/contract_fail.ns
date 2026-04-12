@@ -1,0 +1,10 @@
+-- Test that require violation produces a clear runtime error
+
+ns test
+
+fn safe_divide(a: Int, b: Int) -> Int
+  require b /= 0
+  a / b
+
+main with [ProductionHandler]
+  safe_divide(42, 0)
