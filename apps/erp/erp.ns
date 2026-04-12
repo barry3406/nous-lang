@@ -1,0 +1,176 @@
+-- ═══════════════════════════════════════════════════════
+-- NousERP — Employee Management System
+-- Written entirely in Nous. Constraint-verified business logic.
+-- ═══════════════════════════════════════════════════════
+
+ns erp
+
+-- ── Employee Lifecycle State Machine ─────────────────
+
+state EmployeeStatus
+  Onboarding -[activate]-> Active
+  Onboarding -[reject]-> Terminated
+  Active -[suspend]-> Suspended
+  Active -[terminate]-> Terminated
+  Active -[retire]-> Retired
+  Suspended -[reactivate]-> Active
+  Suspended -[terminate]-> Terminated
+
+-- ── Leave State Machine ──────────────────────────────
+
+state LeaveRequest
+  Draft -[submit]-> Pending
+  Pending -[approve]-> Approved
+  Pending -[reject]-> Rejected
+  Approved -[cancel]-> Cancelled
+
+-- ── Database Setup ───────────────────────────────────
+
+fn init_erp_db(db: Text) -> Result[Text, Text]
+  effect Db.write
+  db_execute(db, "CREATE TABLE IF NOT EXISTS departments (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, manager_id INTEGER, budget INTEGER DEFAULT 0, created_at INTEGER)")
+  db_execute(db, "CREATE TABLE IF NOT EXISTS employees (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, department_id INTEGER, role TEXT NOT NULL DEFAULT 'staff', status TEXT NOT NULL DEFAULT 'onboarding', salary INTEGER NOT NULL DEFAULT 0, hire_date INTEGER, created_at INTEGER)")
+  db_execute(db, "CREATE TABLE IF NOT EXISTS attendance (id INTEGER PRIMARY KEY AUTOINCREMENT, employee_id INTEGER NOT NULL, check_in INTEGER, check_out INTEGER, date TEXT NOT NULL, hours INTEGER DEFAULT 0)")
+  db_execute(db, "CREATE TABLE IF NOT EXISTS leaves (id INTEGER PRIMARY KEY AUTOINCREMENT, employee_id INTEGER NOT NULL, leave_type TEXT NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL, days INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'draft', reason TEXT, approved_by INTEGER, created_at INTEGER)")
+  db_execute(db, "CREATE TABLE IF NOT EXISTS payroll (id INTEGER PRIMARY KEY AUTOINCREMENT, employee_id INTEGER NOT NULL, period TEXT NOT NULL, base_salary INTEGER NOT NULL, deductions INTEGER DEFAULT 0, bonus INTEGER DEFAULT 0, net_pay INTEGER NOT NULL, paid_at INTEGER)")
+  Ok(db)
+
+-- ── Department Operations ────────────────────────────
+
+fn add_department(db: Text, name: Text, budget: Int) -> Result[Text, Text]
+  require text_len(name) > 0
+  require budget >= 0
+  effect Db.write
+  let ts = int_to_text(now_unix())
+  let sql = text_concat("INSERT INTO departments (name, budget, created_at) VALUES ('", text_concat(name, text_concat("', ", text_concat(int_to_text(budget), text_concat(", ", text_concat(ts, ")"))))))
+  db_execute(db, sql)
+  Ok(name)
+
+-- ── Employee Operations ──────────────────────────────
+
+fn add_employee(db: Text, name: Text, email: Text, dept_id: Int, role: Text, salary: Int) -> Result[Text, Text]
+  require text_len(name) > 0
+  require text_len(email) > 0
+  require salary >= 0
+  effect Db.write
+  let ts = int_to_text(now_unix())
+  let sql = text_concat("INSERT INTO employees (name, email, department_id, role, salary, status, hire_date, created_at) VALUES ('", text_concat(name, text_concat("', '", text_concat(email, text_concat("', ", text_concat(int_to_text(dept_id), text_concat(", '", text_concat(role, text_concat("', ", text_concat(int_to_text(salary), text_concat(", 'onboarding', ", text_concat(ts, text_concat(", ", text_concat(ts, ")"))))))))))))))
+  db_execute(db, sql)
+  Ok(name)
+
+fn activate_employee(db: Text, id: Int) -> Result[Text, Text]
+  effect Db.write
+  let sql = text_concat("UPDATE employees SET status = 'active' WHERE id = ", text_concat(int_to_text(id), " AND status = 'onboarding'"))
+  db_execute(db, sql)
+  Ok("activated")
+
+fn terminate_employee(db: Text, id: Int) -> Result[Text, Text]
+  effect Db.write
+  let sql = text_concat("UPDATE employees SET status = 'terminated' WHERE id = ", text_concat(int_to_text(id), " AND status IN ('active', 'suspended', 'onboarding')"))
+  db_execute(db, sql)
+  Ok("terminated")
+
+fn suspend_employee(db: Text, id: Int) -> Result[Text, Text]
+  effect Db.write
+  let sql = text_concat("UPDATE employees SET status = 'suspended' WHERE id = ", text_concat(int_to_text(id), " AND status = 'active'"))
+  db_execute(db, sql)
+  Ok("suspended")
+
+-- ── Attendance ───────────────────────────────────────
+
+fn check_in(db: Text, employee_id: Int) -> Result[Text, Text]
+  effect Db.write
+  let ts = int_to_text(now_unix())
+  let sql = text_concat("INSERT INTO attendance (employee_id, check_in, date) VALUES (", text_concat(int_to_text(employee_id), text_concat(", ", text_concat(ts, ", date('now'))"))))
+  db_execute(db, sql)
+  Ok("checked in")
+
+fn check_out(db: Text, attendance_id: Int) -> Result[Text, Text]
+  effect Db.write
+  let ts = int_to_text(now_unix())
+  let sql = text_concat("UPDATE attendance SET check_out = ", text_concat(ts, text_concat(" WHERE id = ", int_to_text(attendance_id))))
+  db_execute(db, sql)
+  Ok("checked out")
+
+-- ── Leave Management ─────────────────────────────────
+
+fn request_leave(db: Text, employee_id: Int, leave_type: Text, start_date: Text, end_date: Text, days: Int, reason: Text) -> Result[Text, Text]
+  require days > 0
+  require days <= 30
+  effect Db.write
+  let ts = int_to_text(now_unix())
+  let sql = text_concat("INSERT INTO leaves (employee_id, leave_type, start_date, end_date, days, status, reason, created_at) VALUES (", text_concat(int_to_text(employee_id), text_concat(", '", text_concat(leave_type, text_concat("', '", text_concat(start_date, text_concat("', '", text_concat(end_date, text_concat("', ", text_concat(int_to_text(days), text_concat(", 'pending', '", text_concat(reason, text_concat("', ", text_concat(ts, ")"))))))))))))))
+  db_execute(db, sql)
+  Ok("submitted")
+
+fn approve_leave(db: Text, leave_id: Int, approver_id: Int) -> Result[Text, Text]
+  effect Db.write
+  let sql = text_concat("UPDATE leaves SET status = 'approved', approved_by = ", text_concat(int_to_text(approver_id), text_concat(" WHERE id = ", text_concat(int_to_text(leave_id), " AND status = 'pending'"))))
+  db_execute(db, sql)
+  Ok("approved")
+
+fn reject_leave(db: Text, leave_id: Int) -> Result[Text, Text]
+  effect Db.write
+  let sql = text_concat("UPDATE leaves SET status = 'rejected' WHERE id = ", text_concat(int_to_text(leave_id), " AND status = 'pending'"))
+  db_execute(db, sql)
+  Ok("rejected")
+
+-- ── Payroll (constraint-synthesized) ─────────────────
+
+fn calculate_net_pay(base_salary: Int, deductions: Int, bonus: Int) -> Int
+  require base_salary >= 0
+  require deductions >= 0
+  require bonus >= 0
+  ensure result == (base_salary - deductions) + bonus
+
+fn run_payroll(db: Text, employee_id: Int, period: Text, base_salary: Int, deductions: Int, bonus: Int) -> Result[Text, Text]
+  require base_salary >= 0
+  effect Db.write
+  let net = calculate_net_pay(base_salary, deductions, bonus)
+  let ts = int_to_text(now_unix())
+  let sql = text_concat("INSERT INTO payroll (employee_id, period, base_salary, deductions, bonus, net_pay, paid_at) VALUES (", text_concat(int_to_text(employee_id), text_concat(", '", text_concat(period, text_concat("', ", text_concat(int_to_text(base_salary), text_concat(", ", text_concat(int_to_text(deductions), text_concat(", ", text_concat(int_to_text(bonus), text_concat(", ", text_concat(int_to_text(net), text_concat(", ", text_concat(ts, ")"))))))))))))))
+  db_execute(db, sql)
+  Ok(int_to_text(net))
+
+-- ── Seed Demo Data ───────────────────────────────────
+
+fn seed_erp(db: Text) -> Result[Text, Text]
+  effect Db.write
+  add_department(db, "Engineering", 500000)?
+  add_department(db, "Marketing", 200000)?
+  add_department(db, "Finance", 300000)?
+  add_department(db, "Human Resources", 150000)?
+  add_employee(db, "Alice Chen", "alice@company.com", 1, "senior_engineer", 15000)?
+  add_employee(db, "Bob Zhang", "bob@company.com", 1, "engineer", 12000)?
+  add_employee(db, "Carol Wang", "carol@company.com", 2, "marketing_lead", 13000)?
+  add_employee(db, "David Li", "david@company.com", 3, "accountant", 11000)?
+  add_employee(db, "Eve Liu", "eve@company.com", 4, "hr_manager", 14000)?
+  activate_employee(db, 1)?
+  activate_employee(db, 2)?
+  activate_employee(db, 3)?
+  activate_employee(db, 4)?
+  activate_employee(db, 5)?
+  request_leave(db, 1, "annual", "2026-04-15", "2026-04-17", 3, "family trip")?
+  request_leave(db, 3, "sick", "2026-04-14", "2026-04-14", 1, "not feeling well")?
+  approve_leave(db, 1, 5)?
+  approve_leave(db, 2, 5)?
+  run_payroll(db, 1, "2026-03", 15000, 2500, 3000)?
+  run_payroll(db, 2, "2026-03", 12000, 2000, 1000)?
+  run_payroll(db, 3, "2026-03", 13000, 2200, 500)?
+  run_payroll(db, 4, "2026-03", 11000, 1800, 0)?
+  run_payroll(db, 5, "2026-03", 14000, 2300, 2000)?
+  Ok("seeded")
+
+-- ── Boot ─────────────────────────────────────────────
+
+main with [ProductionHandler]
+  let db = "/tmp/nous_erp.db"
+  println("NousERP initializing...")
+  init_erp_db(db)?
+  println("[ok] database ready")
+  seed_erp(db)?
+  println("[ok] demo data loaded")
+  println("")
+  println("starting NousERP on http://localhost:8888")
+  http_serve_static(8888, db, "apps/erp/web")
+  0

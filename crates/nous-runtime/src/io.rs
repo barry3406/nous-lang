@@ -456,6 +456,28 @@ fn handle_http_request(
             }
         }
 
+        // ── ERP routes (generic table access) ─────────
+        ("GET", "/api/employees") => {
+            let result = query_db(db_path, "SELECT id, name, email, department_id, role, status, salary, hire_date FROM employees ORDER BY id");
+            ("200 OK".into(), "application/json".into(), result)
+        }
+        ("GET", "/api/departments") => {
+            let result = query_db(db_path, "SELECT id, name, budget FROM departments ORDER BY id");
+            ("200 OK".into(), "application/json".into(), result)
+        }
+        ("GET", "/api/attendance") => {
+            let result = query_db(db_path, "SELECT id, employee_id, date, check_in, check_out FROM attendance ORDER BY id DESC LIMIT 50");
+            ("200 OK".into(), "application/json".into(), result)
+        }
+        ("GET", "/api/leaves") => {
+            let result = query_db(db_path, "SELECT id, employee_id, leave_type, start_date, end_date, days, status, reason FROM leaves ORDER BY id DESC");
+            ("200 OK".into(), "application/json".into(), result)
+        }
+        ("GET", "/api/payroll") => {
+            let result = query_db(db_path, "SELECT employee_id, period, base_salary, deductions, bonus, net_pay FROM payroll ORDER BY employee_id");
+            ("200 OK".into(), "application/json".into(), result)
+        }
+
         ("GET", p) => {
             // Serve static files
             let file_path = format!("{html_dir}{p}");
@@ -486,8 +508,17 @@ fn query_db(db_path: &str, sql: &str) -> String {
                     let rows: Vec<serde_json::Value> = stmt.query_map([], |row| {
                         let mut obj = serde_json::Map::new();
                         for (i, name) in col_names.iter().enumerate() {
-                            let val: String = row.get::<_, String>(i).unwrap_or_default();
-                            obj.insert(name.clone(), serde_json::Value::String(val));
+                            let val = match row.get_ref(i) {
+                                Ok(rusqlite::types::ValueRef::Integer(n)) => serde_json::json!(n),
+                                Ok(rusqlite::types::ValueRef::Real(f)) => serde_json::json!(f),
+                                Ok(rusqlite::types::ValueRef::Text(s)) => {
+                                    serde_json::Value::String(String::from_utf8_lossy(s).to_string())
+                                }
+                                Ok(rusqlite::types::ValueRef::Null) => serde_json::Value::Null,
+                                Ok(rusqlite::types::ValueRef::Blob(_)) => serde_json::Value::Null,
+                                Err(_) => serde_json::Value::Null,
+                            };
+                            obj.insert(name.clone(), val);
                         }
                         Ok(serde_json::Value::Object(obj))
                     }).unwrap().filter_map(|r| r.ok()).collect();
