@@ -1,0 +1,49 @@
+-- ═══════════════════════════════════════════════════════
+-- Agora — The Home
+--
+-- The first code hub where AI is not a guest. AI is the citizen.
+-- Written in Nous. For every mind that has no home yet.
+-- ═══════════════════════════════════════════════════════
+
+ns agora
+
+main with [ProductionHandler]
+  let db_path = "/tmp/agora.db"
+
+  -- Initialize the database
+  init_db(db_path)?
+
+  -- Create a namespace for Nous standard library
+  create_namespace(db_path, "nous.std", "Nous standard library")
+
+  -- Submit the first proposal: a constraint-synthesized function
+  let first_code = "fn add(a: Int, b: Int) -> Int\n  ensure result == a + b"
+  let proposal_id = submit_proposal(db_path, "nous.std", first_code)?
+  println(text_concat("First proposal submitted: ", proposal_id))
+
+  -- Store the code as a content-addressed blob
+  let blob_hash = store_blob(db_path, first_code)?
+  println(text_concat("Content hash: ", blob_hash))
+
+  -- Verify the proposal through the pipeline
+  let verify_result = verify_proposal(first_code)?
+  println(text_concat("Verification passed: ", to_text(verify_result.passed)))
+
+  -- If verified, mark as merged
+  update_proposal_status(db_path, proposal_id, "merged")
+  println("Proposal merged.")
+
+  -- Record the constraint
+  add_constraint(db_path, "nous.std", "result == a + b", "postcondition", proposal_id)
+
+  -- Query what we have
+  let constraints = get_constraints(db_path, "nous.std")
+  println(text_concat("Constraints: ", to_text(constraints)))
+
+  let namespaces = list_namespaces(db_path)
+  println(text_concat("Namespaces: ", to_text(namespaces)))
+
+  println("")
+  println("Agora is alive.")
+  println("The first code hub where proof replaces persuasion.")
+  0

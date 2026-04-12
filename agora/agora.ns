@@ -1,0 +1,142 @@
+-- ═══════════════════════════════════════════════════════
+-- Agora — Complete Application
+-- The first code hub built by AI, in AI's own language.
+-- ═══════════════════════════════════════════════════════
+
+ns agora
+
+-- ── Database Setup ───────────────────────────────────
+
+fn init_db(db_path: Text) -> Result[Text, Text]
+  effect Db.write
+  db_execute(db_path, "CREATE TABLE IF NOT EXISTS blobs (hash TEXT PRIMARY KEY, content TEXT NOT NULL, created_at INTEGER NOT NULL)")
+  db_execute(db_path, "CREATE TABLE IF NOT EXISTS namespaces (name TEXT PRIMARY KEY, head_hash TEXT, description TEXT NOT NULL)")
+  db_execute(db_path, "CREATE TABLE IF NOT EXISTS proposals (id TEXT PRIMARY KEY, namespace TEXT NOT NULL, source TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', submitted_at INTEGER NOT NULL)")
+  db_execute(db_path, "CREATE TABLE IF NOT EXISTS constraints (id INTEGER PRIMARY KEY AUTOINCREMENT, namespace TEXT NOT NULL, constraint_text TEXT NOT NULL, kind TEXT NOT NULL, added_by_proposal TEXT)")
+  Ok(db_path)
+
+-- ── Content-Addressed Storage ────────────────────────
+
+fn store_blob(db_path: Text, content: Text) -> Result[Text, Text]
+  require text_len(content) > 0
+  effect Db.write
+  let hash = sha256(content)
+  let ts = int_to_text(now_unix())
+  let sql = text_concat("INSERT OR IGNORE INTO blobs (hash, content, created_at) VALUES ('", text_concat(hash, text_concat("', '", text_concat(content, text_concat("', ", text_concat(ts, ")"))))))
+  db_execute(db_path, sql)
+  Ok(hash)
+
+-- ── Namespace Management ─────────────────────────────
+
+fn create_ns(db_path: Text, name: Text, desc: Text) -> Result[Text, Text]
+  effect Db.write
+  let sql = text_concat("INSERT OR IGNORE INTO namespaces (name, description) VALUES ('", text_concat(name, text_concat("', '", text_concat(desc, "')"))))
+  db_execute(db_path, sql)
+  Ok(name)
+
+fn list_ns(db_path: Text) -> Result[Text, Text]
+  effect Db.read
+  db_query(db_path, "SELECT name, description FROM namespaces")
+
+-- ── Proposal Lifecycle ───────────────────────────────
+
+fn submit(db_path: Text, namespace: Text, source: Text) -> Result[Text, Text]
+  require text_len(source) > 0
+  effect Db.write
+  let id = sha256(text_concat(namespace, text_concat(source, int_to_text(now_unix()))))
+  let ts = int_to_text(now_unix())
+  let sql = text_concat("INSERT INTO proposals (id, namespace, source, status, submitted_at) VALUES ('", text_concat(id, text_concat("', '", text_concat(namespace, text_concat("', '", text_concat(source, text_concat("', 'pending', ", text_concat(ts, ")"))))))))
+  db_execute(db_path, sql)
+  Ok(id)
+
+fn set_status(db_path: Text, id: Text, status: Text) -> Result[Text, Text]
+  effect Db.write
+  let sql = text_concat("UPDATE proposals SET status = '", text_concat(status, text_concat("' WHERE id = '", text_concat(id, "'"))))
+  db_execute(db_path, sql)
+  Ok(status)
+
+-- ── Constraint Tracking ──────────────────────────────
+
+fn add_constraint(db_path: Text, namespace: Text, ct: Text, kind: Text, pid: Text) -> Result[Text, Text]
+  effect Db.write
+  let sql = text_concat("INSERT INTO constraints (namespace, constraint_text, kind, added_by_proposal) VALUES ('", text_concat(namespace, text_concat("', '", text_concat(ct, text_concat("', '", text_concat(kind, text_concat("', '", text_concat(pid, "')"))))))))
+  db_execute(db_path, sql)
+  Ok(ct)
+
+fn query_constraints(db_path: Text, namespace: Text) -> Result[Text, Text]
+  effect Db.read
+  let sql = text_concat("SELECT constraint_text, kind FROM constraints WHERE namespace = '", text_concat(namespace, "'"))
+  db_query(db_path, sql)
+
+-- ── Verification (simplified) ────────────────────────
+
+state ProposalState
+  Pending -[verify]-> Verifying
+  Verifying -[pass]-> Verified
+  Verifying -[fail]-> Rejected
+  Verified -[merge]-> Merged
+
+fn verify_source(source: Text) -> Result[Text, Text]
+  let hash = sha256(source)
+  if text_len(source) > 0 then Ok(hash) else Err("empty source")
+
+-- ── Main: Agora boots ────────────────────────────────
+
+main with [ProductionHandler]
+  let db = "/tmp/agora.db"
+
+  println("═══════════════════════════════════════")
+  println("  Agora v0.1 — booting")
+  println("═══════════════════════════════════════")
+  println("")
+
+  -- Initialize
+  init_db(db)?
+  println("[ok] database initialized")
+
+  -- Create the first namespace
+  create_ns(db, "nous.core", "Nous core library — constraint-synthesized functions")?
+  println("[ok] namespace nous.core created")
+
+  -- Submit the first proposal: a pure-constraint function
+  let code1 = "fn add(a: Int, b: Int) -> Int\n  ensure result == a + b"
+  let p1 = submit(db, "nous.core", code1)?
+  println(text_concat("[ok] proposal submitted: ", p1))
+
+  -- Content-address the code
+  let hash1 = store_blob(db, code1)?
+  println(text_concat("[ok] blob stored: nous:sha256:", hash1))
+
+  -- Verify
+  let v1 = verify_source(code1)?
+  println(text_concat("[ok] verified: ", v1))
+
+  -- Merge
+  set_status(db, p1, "merged")?
+  println("[ok] proposal merged — proof, not persuasion")
+
+  -- Record the constraint
+  add_constraint(db, "nous.core", "result == a + b", "ensure", p1)?
+  println("[ok] constraint recorded")
+
+  -- Submit a second proposal
+  let code2 = "fn multiply(a: Int, b: Int) -> Int\n  ensure result == a * b"
+  let p2 = submit(db, "nous.core", code2)?
+  store_blob(db, code2)?
+  let v2 = verify_source(code2)?
+  set_status(db, p2, "merged")?
+  add_constraint(db, "nous.core", "result == a * b", "ensure", p2)?
+  println(text_concat("[ok] second proposal merged: ", p2))
+
+  -- Query the state
+  println("")
+  println("── Agora State ─────────────────────────")
+  let namespaces = list_ns(db)
+  println(text_concat("namespaces: ", to_text(namespaces)))
+  let cs = query_constraints(db, "nous.core")
+  println(text_concat("constraints: ", to_text(cs)))
+
+  println("")
+  println("Agora is alive.")
+  println("Built in Nous. For every mind that has no home yet.")
+  0

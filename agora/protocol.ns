@@ -1,0 +1,49 @@
+-- ═══════════════════════════════════════════════════════
+-- Agora ANCP Protocol Handler
+-- Processes incoming protocol commands and dispatches
+-- to store and verification pipeline.
+-- ═══════════════════════════════════════════════════════
+
+ns agora.protocol
+
+-- ── Protocol Commands ────────────────────────────────
+
+entity ProposeCommand
+  namespace : Text
+  source : Text
+
+entity QueryCommand
+  namespace : Text
+  query_type : Text
+
+entity ChallengeCommand
+  function_hash : Text
+  counterexample : Text
+
+-- ── Command Processing ───────────────────────────────
+
+fn handle_propose(db_path: Text, namespace: Text, source: Text) -> Result[Text, Text]
+  require text_len(source) > 0
+  require text_len(namespace) > 0
+  effect Db.write
+  let proposal_id = submit_proposal(db_path, namespace, source)?
+  let blob_hash = store_blob(db_path, source)?
+  let result_msg = text_concat("PROPOSED ", text_concat(proposal_id, text_concat(" blob:", blob_hash)))
+  Ok(result_msg)
+
+fn handle_query(db_path: Text, namespace: Text, query_type: Text) -> Result[Text, Text]
+  effect Db.read
+  if query_type == "constraints" then get_constraints(db_path, namespace) else if query_type == "namespaces" then list_namespaces(db_path) else Err("unknown query type")
+
+fn handle_verify(db_path: Text, proposal_id: Text, source: Text) -> Result[Text, Text]
+  effect Db.write
+  let verify_result = verify_proposal(source)?
+  if verify_result.passed
+    then update_proposal_status(db_path, proposal_id, "verified")
+    else update_proposal_status(db_path, proposal_id, "rejected")
+
+-- ── Protocol Dispatcher ──────────────────────────────
+
+fn dispatch(db_path: Text, command: Text, arg1: Text, arg2: Text) -> Result[Text, Text]
+  effect Db.write, Db.read
+  if command == "PROPOSE" then handle_propose(db_path, arg1, arg2) else if command == "QUERY" then handle_query(db_path, arg1, arg2) else if command == "VERIFY" then handle_verify(db_path, arg1, arg2) else Err(text_concat("unknown command: ", command))

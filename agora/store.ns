@@ -1,0 +1,81 @@
+-- ═══════════════════════════════════════════════════════
+-- Agora Content Store
+-- Content-addressed code storage backed by SQLite.
+-- Written in Nous. For Nous.
+-- ═══════════════════════════════════════════════════════
+
+ns agora.store
+
+-- ── Database Setup ───────────────────────────────────
+
+fn init_db(db_path: Text) -> Result[Text, Text]
+  effect Db.write
+  db_execute(db_path, "CREATE TABLE IF NOT EXISTS blobs (hash TEXT PRIMARY KEY, content TEXT NOT NULL, created_at INTEGER NOT NULL)")
+  db_execute(db_path, "CREATE TABLE IF NOT EXISTS namespaces (name TEXT PRIMARY KEY, head_hash TEXT, description TEXT NOT NULL)")
+  db_execute(db_path, "CREATE TABLE IF NOT EXISTS proposals (id TEXT PRIMARY KEY, namespace TEXT NOT NULL, source TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', submitted_at INTEGER NOT NULL, verified_at INTEGER, merged_at INTEGER)")
+  db_execute(db_path, "CREATE TABLE IF NOT EXISTS constraints (id INTEGER PRIMARY KEY AUTOINCREMENT, namespace TEXT NOT NULL, constraint_text TEXT NOT NULL, kind TEXT NOT NULL, added_by_proposal TEXT)")
+  Ok(db_path)
+
+-- ── Content-Addressed Blob Storage ───────────────────
+
+fn store_blob(db_path: Text, content: Text) -> Result[Text, Text]
+  require text_len(content) > 0
+  effect Db.write
+  let hash = sha256(content)
+  let sql = text_concat("INSERT OR IGNORE INTO blobs (hash, content, created_at) VALUES ('", text_concat(hash, text_concat("', '", text_concat(content, text_concat("', ", text_concat(int_to_text(now_unix()), ")"))))))
+  db_execute(db_path, sql)
+  Ok(hash)
+
+fn get_blob(db_path: Text, hash: Text) -> Result[Text, Text]
+  effect Db.read
+  let sql = text_concat("SELECT content FROM blobs WHERE hash = '", text_concat(hash, "'"))
+  db_query(db_path, sql)
+
+-- ── Namespace Management ─────────────────────────────
+
+fn create_namespace(db_path: Text, name: Text, description: Text) -> Result[Text, Text]
+  require text_len(name) > 0
+  effect Db.write
+  let sql = text_concat("INSERT OR IGNORE INTO namespaces (name, description) VALUES ('", text_concat(name, text_concat("', '", text_concat(description, "')"))))
+  db_execute(db_path, sql)
+  Ok(name)
+
+fn list_namespaces(db_path: Text) -> Result[Text, Text]
+  effect Db.read
+  db_query(db_path, "SELECT name, head_hash, description FROM namespaces")
+
+-- ── Proposal Submission ──────────────────────────────
+
+fn submit_proposal(db_path: Text, namespace: Text, source: Text) -> Result[Text, Text]
+  require text_len(source) > 0
+  require text_len(namespace) > 0
+  effect Db.write
+  let id = sha256(text_concat(namespace, text_concat(source, int_to_text(now_unix()))))
+  let ts = int_to_text(now_unix())
+  let sql = text_concat("INSERT INTO proposals (id, namespace, source, status, submitted_at) VALUES ('", text_concat(id, text_concat("', '", text_concat(namespace, text_concat("', '", text_concat(source, text_concat("', 'pending', ", text_concat(ts, ")"))))))))
+  db_execute(db_path, sql)
+  Ok(id)
+
+fn get_proposal(db_path: Text, id: Text) -> Result[Text, Text]
+  effect Db.read
+  let sql = text_concat("SELECT id, namespace, source, status, submitted_at FROM proposals WHERE id = '", text_concat(id, "'"))
+  db_query(db_path, sql)
+
+fn update_proposal_status(db_path: Text, id: Text, status: Text) -> Result[Text, Text]
+  effect Db.write
+  let sql = text_concat("UPDATE proposals SET status = '", text_concat(status, text_concat("' WHERE id = '", text_concat(id, "'"))))
+  db_execute(db_path, sql)
+  Ok(status)
+
+-- ── Constraint Tracking ──────────────────────────────
+
+fn add_constraint(db_path: Text, namespace: Text, constraint_text: Text, kind: Text, proposal_id: Text) -> Result[Text, Text]
+  effect Db.write
+  let sql = text_concat("INSERT INTO constraints (namespace, constraint_text, kind, added_by_proposal) VALUES ('", text_concat(namespace, text_concat("', '", text_concat(constraint_text, text_concat("', '", text_concat(kind, text_concat("', '", text_concat(proposal_id, "')"))))))))
+  db_execute(db_path, sql)
+  Ok(constraint_text)
+
+fn get_constraints(db_path: Text, namespace: Text) -> Result[Text, Text]
+  effect Db.read
+  let sql = text_concat("SELECT constraint_text, kind, added_by_proposal FROM constraints WHERE namespace = '", text_concat(namespace, "'"))
+  db_query(db_path, sql)

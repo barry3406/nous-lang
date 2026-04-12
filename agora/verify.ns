@@ -1,0 +1,57 @@
+-- ═══════════════════════════════════════════════════════
+-- Agora Verification Pipeline
+-- Three-phase verification: parse → type check → prove.
+-- On Agora, code is not reviewed — it is verified.
+-- ═══════════════════════════════════════════════════════
+
+ns agora.verify
+
+-- ── Pipeline State Machine ───────────────────────────
+
+state VerifyState
+  Pending -[start_verify]-> Phase1
+  Phase1 -[phase1_pass]-> Phase2
+  Phase1 -[phase1_fail]-> Rejected
+  Phase2 -[phase2_pass]-> Phase3
+  Phase2 -[phase2_fail]-> Rejected
+  Phase3 -[phase3_pass]-> Verified
+  Phase3 -[phase3_fail]-> Rejected
+
+-- ── Verification Result ──────────────────────────────
+
+entity VerifyResult
+  passed : Bool
+  phase1_ok : Bool
+  phase2_ok : Bool
+  phase3_ok : Bool
+  message : Text
+  constraints_verified : Int
+  constraints_unverified : Int
+
+-- ── Pipeline Execution ───────────────────────────────
+-- Note: In the full implementation, each phase would call
+-- the Nous compiler/verifier as a builtin. For now we
+-- simulate the pipeline to demonstrate the architecture.
+
+fn make_result(passed: Bool, p1: Bool, p2: Bool, p3: Bool, msg: Text, verified: Int, unverified: Int) -> VerifyResult
+  VerifyResult(passed: passed, phase1_ok: p1, phase2_ok: p2, phase3_ok: p3, message: msg, constraints_verified: verified, constraints_unverified: unverified)
+
+flow verify_proposal(source: Text) -> Result[VerifyResult, Text]
+  require text_len(source) > 0
+  effect Db.read
+
+  step phase1 =
+    let source_hash = sha256(source)
+    let ok = text_len(source) > 0
+    if ok then Ok(source_hash) else Err("phase 1 failed: parse error")
+    rollback: nothing
+
+  step phase2 =
+    let hash = phase1_result
+    Ok(hash)
+    rollback: nothing
+
+  step phase3 =
+    let hash = phase2_result
+    make_result(true, true, true, true, "all phases passed", 0, 0)
+    rollback: nothing
