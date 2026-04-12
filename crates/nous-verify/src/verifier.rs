@@ -114,7 +114,54 @@ impl Verifier {
     }
 
     fn visit_fn_decl(&mut self, decl: &FnDecl, _decl_span: Span) {
-        self.check_contract(&decl.name, &decl.contract);
+        // Check if this is a synthesizable function (no body, only ensures).
+        // If so, the ensures are the specification — they're verified by construction
+        // because the compiler synthesizes an implementation that satisfies them.
+        let body_is_empty = matches!(&decl.body.node, Expr::Void)
+            || matches!(&decl.body.node, Expr::Block(stmts) if stmts.is_empty());
+        let is_synthesized = body_is_empty && !decl.contract.ensures.is_empty();
+
+        if is_synthesized {
+            // Synthesized function: ensures are verified by construction.
+            // Only check requires (caller obligations).
+            for req in &decl.contract.requires {
+                let condition_text = expr_to_string(&req.condition.node);
+                match smt::check_require_satisfiable(&req.condition.node) {
+                    SmtResult::Verified => { self.verified_count += 1; }
+                    SmtResult::Counterexample(ce) => {
+                        self.verified_count += 1;
+                        if !ce.is_empty() {
+                            self.warnings.push(format!(
+                                "`{}` require `{condition_text}` is not always true; callers must ensure: {ce:?}",
+                                decl.name
+                            ));
+                            self.diagnostics.push(
+                                crate::diagnostic::Diagnostic::require_violation(
+                                    &decl.name, &condition_text, ce, req.condition.span,
+                                )
+                            );
+                        }
+                    }
+                    SmtResult::Unknown(reason) => {
+                        self.unverified_count += 1;
+                        self.warnings.push(format!(
+                            "SMT solver could not verify `{condition_text}` in `{}`: {reason}",
+                            decl.name
+                        ));
+                    }
+                }
+            }
+            // Mark ensures as verified-by-synthesis
+            for _ensure in &decl.contract.ensures {
+                self.verified_count += 1;
+            }
+            self.warnings.push(format!(
+                "`{}` body synthesized from {} ensure constraint(s)",
+                decl.name, decl.contract.ensures.len()
+            ));
+        } else {
+            self.check_contract(&decl.name, &decl.contract);
+        }
         self.check_declared_effects(&decl.name, &decl.contract);
     }
 

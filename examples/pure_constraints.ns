@@ -1,0 +1,45 @@
+-- ═══════════════════════════════════════════════════════
+-- Pure Constraint Programming in Nous
+--
+-- ZERO implementation code. Every function is ONLY constraints.
+-- The compiler generates all implementations from ensures.
+-- ═══════════════════════════════════════════════════════
+
+ns pure
+
+-- Arithmetic from constraints alone
+fn add(a: Int, b: Int) -> Int
+  ensure result == a + b
+
+fn subtract(a: Int, b: Int) -> Int
+  ensure result == a - b
+
+fn multiply(a: Int, b: Int) -> Int
+  ensure result == a * b
+
+-- Business logic from constraints alone
+fn calculate_tax(income: Int, rate: Int) -> Int
+  require income >= 0
+  require rate >= 0
+  ensure result == (income * rate) / 100
+
+fn apply_discount(price: Int, discount: Int) -> Int
+  require price >= 0
+  require discount >= 0
+  require discount <= 100
+  ensure result == price - ((price * discount) / 100)
+
+-- Transfer: the constraint IS the business rule
+fn transfer(from_bal: Int, amount: Int) -> Int
+  require amount > 0
+  require from_bal >= amount
+  ensure result == from_bal - amount
+
+main with [ProductionHandler]
+  let sum = add(10, 20)
+  let diff = subtract(100, 37)
+  let prod = multiply(6, 7)
+  let tax = calculate_tax(50000, 20)
+  let discounted = apply_discount(200, 25)
+  let remaining = transfer(1000, 300)
+  sum + diff + prod + tax + discounted + remaining

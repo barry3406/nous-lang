@@ -1,0 +1,28 @@
+-- ═══════════════════════════════════════════════════════
+-- Constraint Synthesis: AI writes WHAT, compiler generates HOW
+--
+-- These functions have NO BODY. Only ensures.
+-- The compiler synthesizes the implementation from constraints.
+-- ═══════════════════════════════════════════════════════
+
+ns synthesis
+
+-- Simple: result is directly defined by a constraint
+fn double(x: Int) -> Int
+  ensure result == x + x
+
+-- Slightly more complex: result is an expression of multiple params
+fn transfer_balance(from_bal: Int, to_bal: Int, amount: Int) -> Int
+  require amount > 0
+  require from_bal >= amount
+  ensure result == from_bal - amount
+
+-- A function WITH a body for comparison
+fn manual_double(x: Int) -> Int
+  x * 2
+
+main with [ProductionHandler]
+  let a = double(21)
+  let b = transfer_balance(1000, 500, 300)
+  let c = manual_double(21)
+  a + b + c

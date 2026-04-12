@@ -165,8 +165,30 @@ impl CompilerCtx {
         // Emit runtime `require` checks at the top of the function.
         self.emit_require_checks(&mut chunk, &mut scope, &decl.contract)?;
 
-        // Compile the function body.
-        self.compile_expr(&mut chunk, &mut scope, &decl.body.node)?;
+        // Check if function has no body (only contracts) — use constraint synthesis
+        let body_is_empty = matches!(&decl.body.node, Expr::Void)
+            || matches!(&decl.body.node, Expr::Block(stmts) if stmts.is_empty());
+
+        if body_is_empty && !decl.contract.ensures.is_empty() {
+            // ═══ CONSTRAINT SYNTHESIS ═══
+            // No body, but has ensures → synthesize implementation from postconditions.
+            // This is the core of "AI writes WHAT, compiler generates HOW."
+            if let Some(synthesized) = nous_verify::synthesize_from_contract(
+                &decl.params, &decl.contract,
+            ) {
+                self.compile_expr(&mut chunk, &mut scope, &synthesized.expr)?;
+            } else {
+                return Err(CompileError::Unsupported {
+                    description: format!(
+                        "cannot synthesize body for `{}`: ensures too complex for automatic synthesis",
+                        decl.name
+                    ),
+                });
+            }
+        } else {
+            // Normal compilation: body is provided
+            self.compile_expr(&mut chunk, &mut scope, &decl.body.node)?;
+        }
 
         // Emit runtime `ensure` checks after the body expression.  The body
         // result is stored in a `result` local; ensure predicates may reference

@@ -430,6 +430,7 @@ version = "0.1.0"
 dependencies = [
  "nous-ast",
  "nous-types",
+ "nous-verify",
  "serde",
  "serde_json",
  "thiserror",
