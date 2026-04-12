@@ -1,0 +1,12 @@
+-- Test SQLite database from Nous
+
+ns db_test
+
+main with [ProductionHandler]
+  let db_path = "/tmp/nous_test.db"
+  db_execute(db_path, "CREATE TABLE IF NOT EXISTS greetings (id INTEGER PRIMARY KEY, msg TEXT)")
+  db_execute(db_path, "INSERT INTO greetings (msg) VALUES ('hello from nous')")
+  db_execute(db_path, "INSERT INTO greetings (msg) VALUES ('constraint synthesis works')")
+  let rows = db_query(db_path, "SELECT id, msg FROM greetings")
+  println(rows)
+  42

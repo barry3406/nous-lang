@@ -586,6 +586,27 @@ impl Vm {
             }
 
             // ----------------------------------------------------------------
+            // Built-in function calls
+            // ----------------------------------------------------------------
+            Op::CallBuiltin { name, arg_count } => {
+                let builtins = crate::builtins::Builtins::new();
+                if let Some(func) = builtins.lookup(&name) {
+                    let mut args = Vec::with_capacity(arg_count);
+                    for _ in 0..arg_count {
+                        args.push(self.pop(&chunk_name, ip_before)?);
+                    }
+                    args.reverse();
+                    let result = func(&args)?;
+                    self.stack.push(result);
+                } else {
+                    return Err(RuntimeError::TypeMismatch {
+                        expected: format!("known builtin function"),
+                        got: format!("unknown builtin: {name}"),
+                    });
+                }
+            }
+
+            // ----------------------------------------------------------------
             // Misc
             // ----------------------------------------------------------------
             Op::Nop => {}

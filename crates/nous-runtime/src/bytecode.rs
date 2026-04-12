@@ -106,6 +106,9 @@ pub enum Op {
     Dup,
 
     // --- misc -------------------------------------------------------------
+    /// Call a built-in function by name with N arguments from the stack.
+    CallBuiltin { name: String, arg_count: usize },
+
     /// No operation; used for padding / placeholder slots.
     Nop,
     /// Terminate execution, leaving the top-of-stack as the program result.

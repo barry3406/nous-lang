@@ -1,0 +1,19 @@
+-- Test built-in I/O: file system, hashing, text operations
+
+ns io_test
+
+fn make_greeting(name: Text) -> Text
+  text_concat("Hello, ", name)
+
+fn hash_content(content: Text) -> Text
+  sha256(content)
+
+main with [ProductionHandler]
+  let greeting = make_greeting("Nous")
+  println(greeting)
+  let hash = hash_content("Nous language v0.1")
+  println(hash)
+  let write_result = fs_write("/tmp/nous_test.txt", "Written by Nous")
+  let read_result = fs_read("/tmp/nous_test.txt")
+  println(read_result)
+  42

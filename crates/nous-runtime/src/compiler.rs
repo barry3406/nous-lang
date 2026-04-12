@@ -585,33 +585,40 @@ impl CompilerCtx {
             // Function calls
             // ----------------------------------------------------------------
             Expr::Call { func, args } => {
-                // Resolve callee first; push Fn value, then arguments.
                 match &func.node {
                     Expr::Ident(name) => {
-                        if self.fns.lookup(name).is_some() {
-                            // Push the Fn constant before arguments so the VM
-                            // can find it at stack[top - arg_count - 1].
+                        // Check builtins first, then user-defined functions
+                        let builtins = crate::builtins::Builtins::new();
+                        if builtins.contains(name) {
+                            // Built-in: push args, then CallBuiltin
+                            for arg in args {
+                                self.compile_expr_into(chunk, scope, &arg.node)?;
+                            }
+                            chunk.emit(Op::CallBuiltin {
+                                name: name.clone(),
+                                arg_count: args.len(),
+                            });
+                        } else if self.fns.lookup(name).is_some() {
+                            // User-defined: push Fn value, then args, then Call
                             let fn_val_idx = chunk.add_constant(Value::Fn {
                                 name: name.clone(),
                                 arity: args.len(),
                             });
                             chunk.emit(Op::LoadConst(fn_val_idx));
+                            for arg in args {
+                                self.compile_expr_into(chunk, scope, &arg.node)?;
+                            }
+                            chunk.emit(Op::Call(args.len()));
                         } else {
                             return Err(CompileError::UndefinedName { name: name.clone() });
                         }
                     }
                     _ => {
-                        // TODO: first-class function call via Fn value on stack
                         return Err(CompileError::Unsupported {
                             description: "non-identifier callee in call expression".into(),
                         });
                     }
                 }
-                // Push arguments left-to-right.
-                for arg in args {
-                    self.compile_expr_into(chunk, scope, &arg.node)?;
-                }
-                chunk.emit(Op::Call(args.len()));
             }
 
             // ----------------------------------------------------------------

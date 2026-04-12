@@ -1,0 +1,23 @@
+[package]
+name = "agora-server"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "agora"
+path = "src/main.rs"
+
+[dependencies]
+nous-ast = { workspace = true }
+nous-parser = { workspace = true }
+nous-types = { workspace = true }
+nous-verify = { workspace = true }
+nous-runtime = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+rusqlite = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tower-http = { workspace = true }
