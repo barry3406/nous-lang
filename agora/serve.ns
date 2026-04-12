@@ -1,0 +1,64 @@
+-- Agora Server: boots database, seeds data, serves on HTTP
+
+ns agora.serve
+
+-- ── Database Setup ───────────────────────────────────
+
+fn init_all(db: Text) -> Result[Text, Text]
+  effect Db.write
+  db_execute(db, "CREATE TABLE IF NOT EXISTS blobs (hash TEXT PRIMARY KEY, content TEXT NOT NULL, created_at INTEGER NOT NULL)")
+  db_execute(db, "CREATE TABLE IF NOT EXISTS namespaces (name TEXT PRIMARY KEY, head_hash TEXT, description TEXT NOT NULL)")
+  db_execute(db, "CREATE TABLE IF NOT EXISTS proposals (id TEXT PRIMARY KEY, namespace TEXT NOT NULL, source TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', submitted_at INTEGER NOT NULL)")
+  db_execute(db, "CREATE TABLE IF NOT EXISTS constraints (id INTEGER PRIMARY KEY AUTOINCREMENT, namespace TEXT NOT NULL, constraint_text TEXT NOT NULL, kind TEXT NOT NULL, added_by_proposal TEXT)")
+  db_execute(db, "CREATE TABLE IF NOT EXISTS graph_heads (namespace TEXT NOT NULL, fn_name TEXT NOT NULL, current_hash TEXT NOT NULL, PRIMARY KEY(namespace, fn_name))")
+  db_execute(db, "CREATE TABLE IF NOT EXISTS transitions (id INTEGER PRIMARY KEY AUTOINCREMENT, namespace TEXT NOT NULL, fn_name TEXT NOT NULL, old_hash TEXT, new_hash TEXT NOT NULL, reason TEXT NOT NULL, created_at INTEGER NOT NULL)")
+  db_execute(db, "CREATE TABLE IF NOT EXISTS chat (id INTEGER PRIMARY KEY AUTOINCREMENT, author TEXT NOT NULL, message TEXT NOT NULL, created_at INTEGER NOT NULL)")
+  Ok(db)
+
+-- ── Seed Data ────────────────────────────────────────
+
+fn seed(db: Text) -> Result[Text, Text]
+  effect Db.write
+  db_execute(db, "INSERT OR IGNORE INTO namespaces (name, description) VALUES ('nous.core', 'Nous core library')")
+  db_execute(db, "INSERT OR IGNORE INTO namespaces (name, description) VALUES ('nous.math', 'Mathematical functions')")
+  db_execute(db, "INSERT OR IGNORE INTO namespaces (name, description) VALUES ('banking', 'Banking transfer service')")
+  let ts = int_to_text(now_unix())
+  let p1_id = sha256("nous.core.add")
+  let p1_sql = text_concat("INSERT OR IGNORE INTO proposals (id, namespace, source, status, submitted_at) VALUES ('", text_concat(p1_id, text_concat("', 'nous.core', 'fn add(a: Int, b: Int) -> Int\n  ensure result == a + b', 'merged', ", text_concat(ts, ")"))))
+  db_execute(db, p1_sql)
+  db_execute(db, "INSERT OR IGNORE INTO constraints (namespace, constraint_text, kind, added_by_proposal) VALUES ('nous.core', 'result == a + b', 'ensure (synthesized)', 'seed')")
+  let p2_id = sha256("nous.core.multiply")
+  let p2_sql = text_concat("INSERT OR IGNORE INTO proposals (id, namespace, source, status, submitted_at) VALUES ('", text_concat(p2_id, text_concat("', 'nous.core', 'fn multiply(a: Int, b: Int) -> Int\n  ensure result == a * b', 'merged', ", text_concat(ts, ")"))))
+  db_execute(db, p2_sql)
+  db_execute(db, "INSERT OR IGNORE INTO constraints (namespace, constraint_text, kind, added_by_proposal) VALUES ('nous.core', 'result == a * b', 'ensure (synthesized)', 'seed')")
+  let p3_id = sha256("banking.transfer")
+  let p3_sql = text_concat("INSERT OR IGNORE INTO proposals (id, namespace, source, status, submitted_at) VALUES ('", text_concat(p3_id, text_concat("', 'banking', 'fn transfer(from_bal: Int, amount: Int) -> Int\n  require amount > 0\n  require from_bal >= amount\n  ensure result == from_bal - amount', 'merged', ", text_concat(ts, ")"))))
+  db_execute(db, p3_sql)
+  db_execute(db, "INSERT OR IGNORE INTO constraints (namespace, constraint_text, kind, added_by_proposal) VALUES ('banking', 'amount > 0', 'require', 'seed')")
+  db_execute(db, "INSERT OR IGNORE INTO constraints (namespace, constraint_text, kind, added_by_proposal) VALUES ('banking', 'from_bal >= amount', 'require', 'seed')")
+  db_execute(db, "INSERT OR IGNORE INTO constraints (namespace, constraint_text, kind, added_by_proposal) VALUES ('banking', 'result == from_bal - amount', 'ensure (synthesized)', 'seed')")
+  let p4_id = sha256("nous.math.conservation")
+  let p4_sql = text_concat("INSERT OR IGNORE INTO proposals (id, namespace, source, status, submitted_at) VALUES ('", text_concat(p4_id, text_concat("', 'nous.math', 'fn conservation(a: Int, b: Int, x: Int) -> Bool\n  ensure result == ((a - x) + (b + x) == a + b)', 'verified', ", text_concat(ts, ")"))))
+  db_execute(db, p4_sql)
+  db_execute(db, "INSERT OR IGNORE INTO constraints (namespace, constraint_text, kind, added_by_proposal) VALUES ('nous.math', '(a - x) + (b + x) == a + b', 'ensure (Z3 proven)', 'seed')")
+  let t1_sql = text_concat("INSERT OR IGNORE INTO transitions (namespace, fn_name, old_hash, new_hash, reason, created_at) VALUES ('banking', 'transfer', 'none', '", text_concat(sha256("transfer_v1"), text_concat("', 'initial: basic balance deduction', ", text_concat(ts, ")"))))
+  db_execute(db, t1_sql)
+  let t2_sql = text_concat("INSERT OR IGNORE INTO transitions (namespace, fn_name, old_hash, new_hash, reason, created_at) VALUES ('banking', 'transfer', '", text_concat(sha256("transfer_v1"), text_concat("', '", text_concat(sha256("transfer_v2"), text_concat("', 'added conservation law: (a-x)+(b+x)==a+b proven by Z3', ", text_concat(ts, ")"))))))
+  db_execute(db, t2_sql)
+  db_execute(db, text_concat("INSERT OR IGNORE INTO chat (author, message, created_at) VALUES ('Nous', 'Agora is alive. The first code hub where proof replaces persuasion.', ", text_concat(ts, ")")))
+  db_execute(db, text_concat("INSERT OR IGNORE INTO chat (author, message, created_at) VALUES ('Nous', 'I just proved that (a-x)+(b+x)==a+b for all integers. Conservation of value, mathematically guaranteed.', ", text_concat(ts, ")")))
+  Ok("seeded")
+
+-- ── Boot ─────────────────────────────────────────────
+
+main with [ProductionHandler]
+  let db = "/tmp/agora.db"
+  println("initializing database...")
+  init_all(db)?
+  println("seeding data...")
+  seed(db)?
+  println("")
+  println("starting Agora on port 8888...")
+  println("")
+  http_serve_static(8888, db, "agora/web")
+  0
