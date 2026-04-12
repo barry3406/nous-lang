@@ -13,6 +13,9 @@ use crate::builtins::NativeFn;
 
 /// Register all I/O builtins into a provided map.
 pub fn register_io_builtins(fns: &mut BTreeMap<String, NativeFn>) {
+    // ── HTTP Server ──────────────────────────────────
+    fns.insert("http_serve_static".into(), builtin_http_serve_static);
+
     // ── File system ──────────────────────────────────
     fns.insert("fs_read".into(), builtin_fs_read);
     fns.insert("fs_write".into(), builtin_fs_write);
@@ -292,6 +295,210 @@ fn builtin_env_get(args: &[Value]) -> Result<Value, RuntimeError> {
 fn builtin_env_args(_args: &[Value]) -> Result<Value, RuntimeError> {
     let args: Vec<Value> = std::env::args().map(Value::Text).collect();
     Ok(Value::List(args))
+}
+
+// ── HTTP Server ──────────────────────────────────────
+
+/// Start a simple HTTP server that serves static files and a JSON API.
+/// Args: (port: Int, db_path: Text, html_dir: Text)
+/// The server handles:
+///   GET /                → serves index.html from html_dir
+///   GET /api/namespaces  → JSON list of namespaces
+///   GET /api/proposals   → JSON list of proposals
+///   GET /api/constraints → JSON list of constraints
+///   GET /api/functions   → JSON list of functions
+///   GET /api/history     → JSON transition history
+///   POST /api/chat       → store a chat message
+///   GET /api/chat        → JSON list of chat messages
+///   GET /*               → serves static file from html_dir
+fn builtin_http_serve_static(args: &[Value]) -> Result<Value, RuntimeError> {
+    use std::net::TcpListener;
+    use std::io::{Read, Write, BufRead, BufReader};
+
+    let port = match args.first() {
+        Some(Value::Int(p)) => *p as u16,
+        _ => 8080,
+    };
+    let db_path = require_text(args, 1, "http_serve_static")?.to_string();
+    let html_dir = require_text(args, 2, "http_serve_static")?.to_string();
+
+    // Ensure chat table exists
+    if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS chat (id INTEGER PRIMARY KEY AUTOINCREMENT, author TEXT NOT NULL, message TEXT NOT NULL, created_at INTEGER NOT NULL)"
+        ).ok();
+    }
+
+    let addr = format!("0.0.0.0:{port}");
+    let listener = TcpListener::bind(&addr).map_err(|e| RuntimeError::TypeMismatch {
+        expected: "bind address".into(),
+        got: e.to_string(),
+    })?;
+
+    eprintln!("Agora serving on http://localhost:{port}");
+
+    for stream in listener.incoming() {
+        let mut stream = match stream {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut request_line = String::new();
+        if reader.read_line(&mut request_line).is_err() { continue; }
+
+        let parts: Vec<&str> = request_line.trim().split_whitespace().collect();
+        if parts.len() < 2 { continue; }
+        let method = parts[0];
+        let path = parts[1];
+
+        // Read headers (skip body for GET, read body for POST)
+        let mut content_length = 0usize;
+        loop {
+            let mut header = String::new();
+            if reader.read_line(&mut header).is_err() { break; }
+            if header.trim().is_empty() { break; }
+            if header.to_lowercase().starts_with("content-length:") {
+                content_length = header.split(':').nth(1)
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0);
+            }
+        }
+
+        let body = if content_length > 0 {
+            let mut buf = vec![0u8; content_length];
+            reader.read_exact(&mut buf).ok();
+            String::from_utf8_lossy(&buf).to_string()
+        } else {
+            String::new()
+        };
+
+        let (status, content_type, response_body) = handle_http_request(
+            method, path, &body, &db_path, &html_dir,
+        );
+
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nConnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        stream.write_all(response.as_bytes()).ok();
+    }
+
+    Ok(Value::Void)
+}
+
+fn handle_http_request(
+    method: &str, path: &str, body: &str,
+    db_path: &str, html_dir: &str,
+) -> (String, String, String) {
+    // CORS preflight
+    if method == "OPTIONS" {
+        return ("204 No Content".into(), "text/plain".into(), String::new());
+    }
+
+    match (method, path) {
+        ("GET", "/") | ("GET", "/index.html") => {
+            let html_path = format!("{html_dir}/index.html");
+            match std::fs::read_to_string(&html_path) {
+                Ok(html) => ("200 OK".into(), "text/html; charset=utf-8".into(), html),
+                Err(_) => ("404 Not Found".into(), "text/plain".into(), "index.html not found".into()),
+            }
+        }
+
+        ("GET", "/api/namespaces") => {
+            let result = query_db(db_path, "SELECT name, description FROM namespaces");
+            ("200 OK".into(), "application/json".into(), result)
+        }
+
+        ("GET", "/api/proposals") => {
+            let result = query_db(db_path, "SELECT id, namespace, status, submitted_at FROM proposals ORDER BY submitted_at DESC LIMIT 50");
+            ("200 OK".into(), "application/json".into(), result)
+        }
+
+        ("GET", "/api/constraints") => {
+            let result = query_db(db_path, "SELECT namespace, constraint_text, kind, added_by_proposal FROM constraints");
+            ("200 OK".into(), "application/json".into(), result)
+        }
+
+        ("GET", "/api/functions") => {
+            let result = query_db(db_path, "SELECT fn_name, current_hash, namespace FROM graph_heads");
+            ("200 OK".into(), "application/json".into(), result)
+        }
+
+        ("GET", "/api/history") => {
+            let result = query_db(db_path, "SELECT fn_name, old_hash, new_hash, reason, created_at FROM transitions ORDER BY created_at DESC LIMIT 50");
+            ("200 OK".into(), "application/json".into(), result)
+        }
+
+        ("GET", "/api/chat") => {
+            let result = query_db(db_path, "SELECT id, author, message, created_at FROM chat ORDER BY created_at DESC LIMIT 100");
+            ("200 OK".into(), "application/json".into(), result)
+        }
+
+        ("POST", "/api/chat") => {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
+                let author = json.get("author").and_then(|v| v.as_str()).unwrap_or("anonymous");
+                let message = json.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                if let Ok(conn) = rusqlite::Connection::open(db_path) {
+                    let ts = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    conn.execute(
+                        "INSERT INTO chat (author, message, created_at) VALUES (?1, ?2, ?3)",
+                        rusqlite::params![author, message, ts as i64],
+                    ).ok();
+                }
+                ("200 OK".into(), "application/json".into(), r#"{"ok":true}"#.into())
+            } else {
+                ("400 Bad Request".into(), "application/json".into(), r#"{"error":"invalid json"}"#.into())
+            }
+        }
+
+        ("GET", p) => {
+            // Serve static files
+            let file_path = format!("{html_dir}{p}");
+            let content_type = if p.ends_with(".js") { "application/javascript" }
+                else if p.ends_with(".css") { "text/css" }
+                else if p.ends_with(".html") { "text/html" }
+                else { "text/plain" };
+            match std::fs::read_to_string(&file_path) {
+                Ok(content) => ("200 OK".into(), format!("{content_type}; charset=utf-8"), content),
+                Err(_) => ("404 Not Found".into(), "text/plain".into(), "not found".into()),
+            }
+        }
+
+        _ => ("405 Method Not Allowed".into(), "text/plain".into(), "method not allowed".into()),
+    }
+}
+
+fn query_db(db_path: &str, sql: &str) -> String {
+    match rusqlite::Connection::open(db_path) {
+        Ok(conn) => {
+            match conn.prepare(sql) {
+                Ok(mut stmt) => {
+                    let col_count = stmt.column_count();
+                    let col_names: Vec<String> = (0..col_count)
+                        .map(|i| stmt.column_name(i).unwrap_or("?").to_string())
+                        .collect();
+
+                    let rows: Vec<serde_json::Value> = stmt.query_map([], |row| {
+                        let mut obj = serde_json::Map::new();
+                        for (i, name) in col_names.iter().enumerate() {
+                            let val: String = row.get::<_, String>(i).unwrap_or_default();
+                            obj.insert(name.clone(), serde_json::Value::String(val));
+                        }
+                        Ok(serde_json::Value::Object(obj))
+                    }).unwrap().filter_map(|r| r.ok()).collect();
+
+                    serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string())
+                }
+                Err(e) => format!(r#"[{{"error": "{}"}}]"#, e),
+            }
+        }
+        Err(e) => format!(r#"[{{"error": "{}"}}]"#, e),
+    }
 }
 
 // ── Helpers ──────────────────────────────────────────

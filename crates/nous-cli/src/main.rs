@@ -43,6 +43,14 @@ enum Commands {
         /// Path to .ns source file
         file: PathBuf,
     },
+    /// Compile to JavaScript
+    Js {
+        /// Path to .ns source file
+        file: PathBuf,
+        /// Output file (default: stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Start interactive REPL
     Repl {
         /// Output JSON for AI consumption (default: human-friendly)
@@ -60,6 +68,7 @@ fn main() {
         Commands::Run { file } => cmd_run(&file),
         Commands::Emit { file } => cmd_emit(&file),
         Commands::Ast { file } => cmd_ast(&file),
+        Commands::Js { file, output } => cmd_js(&file, output.as_deref()),
         Commands::Repl { json } => { repl::run_repl(json); Ok(()) },
     };
 
@@ -225,5 +234,31 @@ fn cmd_ast(path: &PathBuf) -> Result<(), String> {
     let program = nous_parser::parse(&source).map_err(|e| format!("parse error: {e}"))?;
     let json = serde_json::to_string_pretty(&program).map_err(|e| format!("json error: {e}"))?;
     println!("{json}");
+    Ok(())
+}
+
+fn cmd_js(path: &PathBuf, output: Option<&std::path::Path>) -> Result<(), String> {
+    let source = read_source(path)?;
+    let program = nous_parser::parse(&source).map_err(|e| format!("parse error: {e}"))?;
+
+    // Type check first
+    let mut checker = nous_types::TypeChecker::new();
+    checker
+        .check(&program)
+        .map_err(|errors| {
+            for err in &errors {
+                eprintln!("  ✗ {err}");
+            }
+            format!("{} type error(s)", errors.len())
+        })?;
+
+    let js = nous_runtime::codegen_js::compile_to_js(&program);
+
+    if let Some(out_path) = output {
+        std::fs::write(out_path, &js).map_err(|e| format!("write error: {e}"))?;
+        eprintln!("✓ {} → {}", path.display(), out_path.display());
+    } else {
+        println!("{js}");
+    }
     Ok(())
 }

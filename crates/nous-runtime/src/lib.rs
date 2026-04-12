@@ -1,5 +1,6 @@
 pub mod builtins;
 pub mod bytecode;
+pub mod codegen_js;
 pub mod compiler;
 pub mod error;
 pub mod io;
