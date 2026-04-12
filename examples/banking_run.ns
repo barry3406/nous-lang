@@ -1,0 +1,28 @@
+-- Full banking example: records, match, contracts, execution
+
+ns banking
+
+entity Account
+  id : Int
+  balance : Int
+
+fn make_account(id: Int, balance: Int) -> Account
+  Account(id: id, balance: balance)
+
+fn get_balance(account: Account) -> Int
+  account.balance
+
+fn transfer(from: Account, to: Account, amount: Int) -> Result[Int, Text]
+  require amount > 0
+  require from.balance >= amount
+  let new_from_bal = from.balance - amount
+  let new_to_bal = to.balance + amount
+  Ok(new_from_bal + new_to_bal)
+
+main with [ProductionHandler]
+  let alice = make_account(1, 1000)
+  let bob = make_account(2, 500)
+  let result = transfer(alice, bob, 300)
+  match result
+    Ok(total) -> total
+    Err(msg) -> 0

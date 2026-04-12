@@ -19,6 +19,8 @@ pub struct VerifyResult {
     pub unverified_count: usize,
     /// Non-fatal warnings accumulated during the walk.
     pub warnings: Vec<String>,
+    /// Structured diagnostics for AI consumption.
+    pub diagnostics: Vec<crate::diagnostic::Diagnostic>,
 }
 
 // ---------------------------------------------------------------------------
@@ -43,6 +45,8 @@ pub struct Verifier {
     verified_count: usize,
     /// Running count of constraints not yet proven.
     unverified_count: usize,
+    /// Structured diagnostics for AI consumption.
+    pub diagnostics: Vec<crate::diagnostic::Diagnostic>,
 }
 
 impl Verifier {
@@ -53,6 +57,7 @@ impl Verifier {
             warnings: Vec::new(),
             verified_count: 0,
             unverified_count: 0,
+            diagnostics: Vec::new(),
         }
     }
 
@@ -75,6 +80,7 @@ impl Verifier {
                 verified_count: self.verified_count,
                 unverified_count: self.unverified_count,
                 warnings: self.warnings,
+                diagnostics: self.diagnostics,
             })
         } else {
             Err(self.errors)
@@ -136,18 +142,17 @@ impl Verifier {
                     self.verified_count += 1;
                 }
                 SmtResult::Counterexample(ce) => {
-                    // The condition CAN be false — this is expected for requires
-                    // (they guard against bad inputs). Record as verified that
-                    // the constraint is well-formed (not trivially unsatisfiable).
-                    if ce.is_empty() {
-                        self.verified_count += 1;
-                    } else {
-                        // The require is satisfiable (good — it can be met)
-                        self.verified_count += 1;
+                    self.verified_count += 1;
+                    if !ce.is_empty() {
                         self.warnings.push(format!(
                             "`{fn_name}` require `{condition_text}` is not always true; \
                              callers must ensure: {ce:?}"
                         ));
+                        self.diagnostics.push(
+                            crate::diagnostic::Diagnostic::require_violation(
+                                fn_name, &condition_text, ce, span,
+                            )
+                        );
                     }
                 }
                 SmtResult::Unknown(reason) => {

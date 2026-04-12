@@ -68,8 +68,10 @@ pub enum Op {
     JumpIfFalse(usize),
 
     // --- constructors -----------------------------------------------------
-    /// Pop `field_count` (key, value) pairs, push a `Record { name, .. }`.
-    MakeRecord { name: String, field_count: usize },
+    /// Pop `field_names.len()` values (in order), push a `Record { name, .. }`.
+    MakeRecord { name: String, field_names: Vec<String> },
+    /// Pop a value (new field value) and a record, push a new record with the field updated.
+    UpdateField(String),
     /// Pop `n` values, push a `List`.
     MakeList(usize),
     /// Pop `n` values, push a `Tuple`.
@@ -89,6 +91,19 @@ pub enum Op {
     /// Pop a boolean; if false, raise `RuntimeError::EnsureViolated` with
     /// the embedded message.
     CheckEnsure(String),
+
+    // --- pattern matching -------------------------------------------------
+    /// Peek at the top of stack; push `Bool(true)` if it is `Ok(_)`.
+    IsOk,
+    /// Peek at the top of stack; push `Bool(true)` if it is `Err(_)`.
+    IsErr,
+    /// Pop `Ok(v)` or `Err(v)` and push the inner `v`. No variant check.
+    UnwrapInner,
+    /// Peek at the top of stack; push `Bool(true)` if it is
+    /// `Enum { variant, .. }` whose name equals the given string.
+    IsVariant(String),
+    /// Duplicate the top of the stack (push a clone of `stack.last()`).
+    Dup,
 
     // --- misc -------------------------------------------------------------
     /// No operation; used for padding / placeholder slots.

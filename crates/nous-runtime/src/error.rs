@@ -98,4 +98,8 @@ pub enum RuntimeError {
     /// An internal VM invariant was violated (should not happen).
     #[error("internal VM error: {message}")]
     Internal { message: String },
+
+    /// A `match` expression was non-exhaustive: no arm matched the scrutinee.
+    #[error("non-exhaustive match: no arm matched value `{value}`")]
+    NonExhaustiveMatch { value: String },
 }

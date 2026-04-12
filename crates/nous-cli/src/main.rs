@@ -186,22 +186,28 @@ fn cmd_emit(path: &PathBuf) -> Result<(), String> {
     }
 
     let verifier = nous_verify::Verifier::new();
-    if let Err(errors) = verifier.verify(&program) {
-        let diags: Vec<_> = errors
-            .iter()
-            .map(|e| {
-                serde_json::json!({
-                    "level": "error",
-                    "phase": "verify",
-                    "message": e.to_string(),
+    match verifier.verify(&program) {
+        Ok(result) => {
+            if result.diagnostics.is_empty() {
+                println!("[]");
+            } else {
+                println!("{}", serde_json::to_string_pretty(&result.diagnostics).unwrap());
+            }
+        }
+        Err(errors) => {
+            let diags: Vec<_> = errors
+                .iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "level": "error",
+                        "phase": "verify",
+                        "message": e.to_string(),
+                    })
                 })
-            })
-            .collect();
-        println!("{}", serde_json::to_string_pretty(&diags).unwrap());
-        return Ok(());
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&diags).unwrap());
+        }
     }
-
-    println!("[]"); // no diagnostics
     Ok(())
 }
 

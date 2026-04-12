@@ -422,32 +422,37 @@ impl Vm {
             // ----------------------------------------------------------------
             // Constructors
             // ----------------------------------------------------------------
-            Op::MakeRecord { name, field_count } => {
-                // Stack holds `field_count` (Value::Text(key), value) pairs
-                // pushed in order.  We pop them in reverse and build the map.
-                // Convention: compiler pushes (key_const, val) pairs; here we
-                // just pop `field_count * 2` values and treat alternating
-                // entries as (value, key) from the top.
-                // TODO: formalize the key/value ordering in the compiler.
-                let mut fields = BTreeMap::new();
-                let mut pairs: Vec<(String, Value)> = Vec::with_capacity(field_count);
-                for _ in 0..field_count {
-                    let val = self.pop(&chunk_name, ip_before)?;
-                    let key = match self.pop(&chunk_name, ip_before)? {
-                        Value::Text(k) => k,
-                        other => {
-                            return Err(RuntimeError::TypeMismatch {
-                                expected: "Text (field name)".into(),
-                                got: other.type_name().into(),
-                            })
-                        }
-                    };
-                    pairs.push((key, val));
+            Op::MakeRecord { name, field_names } => {
+                // Pop field_names.len() values (in reverse order)
+                let mut values: Vec<Value> = Vec::with_capacity(field_names.len());
+                for _ in 0..field_names.len() {
+                    values.push(self.pop(&chunk_name, ip_before)?);
                 }
-                for (k, v) in pairs.into_iter().rev() {
-                    fields.insert(k, v);
+                values.reverse();
+                let mut fields = BTreeMap::new();
+                for (k, v) in field_names.iter().zip(values) {
+                    fields.insert(k.clone(), v);
                 }
                 self.stack.push(Value::Record { name, fields });
+            }
+
+            Op::UpdateField(field_name) => {
+                // Stack: [record, new_value] — pop new_value, pop record,
+                // push new record with field updated
+                let new_value = self.pop(&chunk_name, ip_before)?;
+                let record = self.pop(&chunk_name, ip_before)?;
+                match record {
+                    Value::Record { name, mut fields } => {
+                        fields.insert(field_name, new_value);
+                        self.stack.push(Value::Record { name, fields });
+                    }
+                    other => {
+                        return Err(RuntimeError::TypeMismatch {
+                            expected: "Record".into(),
+                            got: other.type_name().into(),
+                        });
+                    }
+                }
             }
 
             Op::MakeList(n) => {
@@ -522,6 +527,62 @@ impl Vm {
                         })
                     }
                 }
+            }
+
+            // ----------------------------------------------------------------
+            // Pattern matching helpers
+            // ----------------------------------------------------------------
+            Op::IsOk => {
+                let val = self.stack.last().ok_or_else(|| RuntimeError::StackUnderflow {
+                    chunk_name: chunk_name.clone(),
+                    ip: ip_before,
+                })?;
+                let result = matches!(val, Value::Ok(_));
+                self.stack.push(Value::Bool(result));
+            }
+
+            Op::IsErr => {
+                let val = self.stack.last().ok_or_else(|| RuntimeError::StackUnderflow {
+                    chunk_name: chunk_name.clone(),
+                    ip: ip_before,
+                })?;
+                let result = matches!(val, Value::Err(_));
+                self.stack.push(Value::Bool(result));
+            }
+
+            Op::UnwrapInner => {
+                let val = self.pop(&chunk_name, ip_before)?;
+                let inner = match val {
+                    Value::Ok(inner) => *inner,
+                    Value::Err(inner) => *inner,
+                    other => {
+                        return Err(RuntimeError::TypeMismatch {
+                            expected: "Ok or Err".into(),
+                            got: other.type_name().into(),
+                        })
+                    }
+                };
+                self.stack.push(inner);
+            }
+
+            Op::IsVariant(name) => {
+                let val = self.stack.last().ok_or_else(|| RuntimeError::StackUnderflow {
+                    chunk_name: chunk_name.clone(),
+                    ip: ip_before,
+                })?;
+                let result = match val {
+                    Value::Enum { variant, .. } => variant == &name,
+                    _ => false,
+                };
+                self.stack.push(Value::Bool(result));
+            }
+
+            Op::Dup => {
+                let val = self.stack.last().ok_or_else(|| RuntimeError::StackUnderflow {
+                    chunk_name: chunk_name.clone(),
+                    ip: ip_before,
+                })?.clone();
+                self.stack.push(val);
             }
 
             // ----------------------------------------------------------------
