@@ -1,0 +1,43 @@
+-- Simplified banking example to test the full pipeline
+
+ns banking
+
+type AccountId = Text
+type Money = Nat
+
+entity Account
+  id      : AccountId
+  owner   : Text
+  balance : Money
+
+enum TransferError
+  InsufficientFunds(available: Money, requested: Money)
+  SameAccount
+
+state AccountLifecycle
+  Active -[freeze]-> Frozen
+  Frozen -[unfreeze]-> Active
+  Active -[close]-> Closed
+  Frozen -[close]-> Closed
+
+fn validate(from: Account, to: Account, amount: Money) -> Result[Void, TransferError]
+  require from.balance >= amount
+  Ok(void)
+
+flow transfer(from_id: AccountId, to_id: AccountId, amount: Money) -> Result[Account, TransferError]
+  ensure match result
+    Ok(a) -> a.balance >= 0
+    Err(_) -> true
+  effect Db.write
+
+  step load =
+    let from = load_account(from_id)
+    validate(from, from, amount)?
+    from
+    rollback: nothing
+
+  step execute =
+    let from = load.result
+    let new_balance = from.balance - amount
+    { from with balance: new_balance }
+    rollback: nothing

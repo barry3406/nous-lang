@@ -1,0 +1,24 @@
+-- Minimal Nous program to test the parser
+
+ns test
+
+type Age = Nat where self >= 0
+
+entity Person
+  name : Text
+  age : Nat
+
+enum Color
+  Red
+  Green
+  Blue
+
+state Light
+  Off -[turn_on]-> On
+  On -[turn_off]-> Off
+
+fn greet(person: Person) -> Text
+  require person.age >= 0
+  effect Log.append
+  let msg = "hello"
+  Ok(msg)

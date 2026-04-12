@@ -1,0 +1,18 @@
+[package]
+name = "nous-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "nous"
+path = "src/main.rs"
+
+[dependencies]
+nous-ast = { workspace = true }
+nous-parser = { workspace = true }
+nous-types = { workspace = true }
+nous-verify = { workspace = true }
+nous-runtime = { workspace = true }
+clap = { workspace = true }
+serde_json = { workspace = true }
+miette = { workspace = true }

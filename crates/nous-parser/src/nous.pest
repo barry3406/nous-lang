@@ -1,0 +1,265 @@
+// ═══════════════════════════════════════════════════════
+// Nous Language Grammar (PEG)
+// After indent-preprocessing, ⇥/⇤ mark block boundaries.
+// Newlines are whitespace; structure comes from ⇥/⇤ only.
+// ═══════════════════════════════════════════════════════
+
+program = { SOI ~ declaration* ~ EOI }
+
+// ── Top-level declarations ────��──────────────────────
+declaration = {
+    namespace_decl
+  | use_decl
+  | type_decl
+  | entity_decl
+  | enum_decl
+  | state_decl
+  | effect_decl
+  | flow_decl
+  | fn_decl
+  | endpoint_decl
+  | handler_decl
+  | main_decl
+}
+
+// ── Namespace & Use ──────────────────────────────────
+namespace_decl = { "ns" ~ dotted_path }
+use_decl       = { "use" ~ dotted_path ~ ("." ~ "*")? }
+dotted_path    = { ident ~ ("." ~ ident)* }
+
+// ── Type declarations ────────────────────────────────
+type_decl = { "type" ~ ident ~ "=" ~ type_expr }
+
+type_expr = { type_union }
+type_union = { type_refined ~ ("|" ~ type_refined)* }
+type_refined = { type_primary ~ ("where" ~ expr)? }
+
+type_primary = {
+    void_type
+  | tuple_type
+  | generic_type
+  | named_type
+}
+
+named_type   = { ident }
+generic_type = { ident ~ "[" ~ type_expr ~ ("," ~ type_expr)* ~ "]" }
+tuple_type   = { "(" ~ type_expr ~ ("," ~ type_expr)+ ~ ")" }
+void_type    = { "Void" }
+
+// ── Entity declaration ───────────────────────────────
+entity_decl = {
+    "entity" ~ ident ~ BLOCK_START ~ entity_member+ ~ BLOCK_END
+}
+entity_member = { invariant_clause | field_decl }
+field_decl = { ident ~ ":" ~ type_expr }
+invariant_clause = { "invariant" ~ expr }
+
+// ── Enum declaration ─────────────────────────────────
+enum_decl = {
+    "enum" ~ ident ~ BLOCK_START ~ enum_variant+ ~ BLOCK_END
+}
+enum_variant = { ident ~ ("(" ~ field_decl ~ ("," ~ field_decl)* ~ ")")? }
+
+// ── State machine ────────────────────────────────────
+state_decl = {
+    "state" ~ ident ~ BLOCK_START ~ transition+ ~ BLOCK_END
+}
+transition = {
+    ident ~ "-[" ~ ident ~ transition_params? ~ "]->" ~ ident
+}
+transition_params = { "(" ~ param ~ ("," ~ param)* ~ ")" }
+
+// ── Effect declaration ───────────────────────────────
+effect_decl = { "effect" ~ dotted_path }
+
+// ── Function declaration ─────────────────────────────
+fn_decl = {
+    "fn" ~ ident ~ "(" ~ param_list? ~ ")" ~ "->" ~ type_expr
+    ~ BLOCK_START ~ (contract_clause | stmt)* ~ BLOCK_END
+}
+
+param_list = { param ~ ("," ~ param)* }
+param      = { ident ~ ":" ~ type_expr }
+
+contract_clause = {
+    require_clause
+  | ensure_clause
+  | effect_clause
+}
+
+require_clause = { "require" ~ expr ~ ("else" ~ expr)? }
+ensure_clause  = { "ensure" ~ expr }
+effect_clause  = { "effect" ~ dotted_path ~ ("," ~ dotted_path)* }
+
+// ── Flow declaration ─────────────────────────────────
+flow_decl = {
+    "flow" ~ ident ~ "(" ~ param_list? ~ ")" ~ "->" ~ type_expr
+    ~ BLOCK_START ~ (contract_clause | flow_step)* ~ BLOCK_END
+}
+
+flow_step = {
+    "step" ~ ident ~ "=" ~ BLOCK_START ~ stmt* ~ "rollback:" ~ expr ~ BLOCK_END
+}
+
+// ── Endpoint declaration ─────────────────────────────
+endpoint_decl = {
+    "endpoint" ~ http_method ~ url_path
+    ~ BLOCK_START
+    ~ "input" ~ BLOCK_START ~ field_decl* ~ BLOCK_END
+    ~ "output" ~ BLOCK_START ~ output_mapping* ~ BLOCK_END
+    ~ "handler" ~ BLOCK_START ~ expr ~ BLOCK_END
+    ~ BLOCK_END
+}
+
+http_method    = { "GET" | "POST" | "PUT" | "DELETE" | "PATCH" }
+url_path       = @{ "/" ~ (ASCII_ALPHANUMERIC | "/" | "_" | "-" | ":" )* }
+output_mapping = { integer_lit ~ ":" ~ type_expr }
+
+// ── Handler declaration ──────────────────────────────
+handler_decl = {
+    "handler" ~ ident ~ BLOCK_START ~ handler_binding+ ~ BLOCK_END
+}
+handler_binding = { ident ~ "=" ~ expr }
+
+// ── Main entry point ─────────────────────────────────
+main_decl = {
+    "main" ~ "with" ~ "[" ~ ident ~ ("," ~ ident)* ~ "]"
+    ~ BLOCK_START ~ stmt* ~ BLOCK_END
+}
+
+// ── Statements & Expressions ─────────────────────────
+stmt = {
+    let_stmt
+  | require_stmt
+  | return_stmt
+  | expr_stmt
+}
+
+let_stmt     = { "let" ~ pattern ~ (":" ~ type_expr)? ~ "=" ~ expr }
+require_stmt = { "require" ~ expr ~ ("else" ~ expr)? }
+return_stmt  = { "return" ~ expr }
+expr_stmt    = { expr }
+
+expr = { pipe_expr }
+
+pipe_expr    = { or_expr ~ ("|>" ~ ident ~ ("(" ~ arg_list? ~ ")")?)* }
+or_expr      = { and_expr ~ ("or" ~ and_expr)* }
+and_expr     = { compare_expr ~ ("and" ~ compare_expr)* }
+compare_expr = { implies_expr ~ (compare_op ~ implies_expr)? }
+implies_expr = { add_expr ~ ("implies" ~ add_expr)? }
+add_expr     = { mul_expr ~ (add_op ~ mul_expr)* }
+mul_expr     = { unary_expr ~ (mul_op ~ unary_expr)* }
+
+unary_expr = { neg_expr | not_expr | postfix_expr }
+neg_expr   = { "-" ~ postfix_expr }
+not_expr   = { "not" ~ postfix_expr }
+
+postfix_expr = { primary_expr ~ postfix_op* }
+postfix_op   = { field_access | call_args | try_op | prime_op }
+
+field_access = { "." ~ ident }
+call_args    = { "(" ~ arg_list? ~ ")" }
+try_op       = { "?" }
+prime_op     = { "'" }
+arg_list     = { expr ~ ("," ~ expr)* }
+
+primary_expr = {
+    match_expr
+  | if_expr
+  | transaction_expr
+  | record_update_expr
+  | ok_expr
+  | err_expr
+  | pre_expr
+  | void_lit
+  | self_ref
+  | nothing_lit
+  | list_lit
+  | tuple_or_paren
+  | decimal_lit
+  | integer_lit
+  | string_lit
+  | bool_lit
+  | lambda_expr
+  | record_expr
+  | ident_expr
+}
+
+// Literals
+integer_lit = @{ ASCII_DIGIT+ }
+decimal_lit = @{ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
+string_lit  = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+bool_lit    = { "true" | "false" }
+void_lit    = { "void" }
+self_ref    = { "self" }
+nothing_lit = { "nothing" }
+
+// Compound expressions
+match_expr = {
+    "match" ~ expr ~ BLOCK_START ~ match_arm+ ~ BLOCK_END
+}
+match_arm = { pattern ~ "->" ~ expr }
+
+if_expr = { "if" ~ expr ~ "then" ~ expr ~ ("else" ~ expr)? }
+
+transaction_expr = { "transaction" ~ BLOCK_START ~ stmt* ~ BLOCK_END }
+
+record_update_expr = {
+    "{" ~ expr ~ "with" ~ field_assign ~ ("," ~ field_assign)* ~ "}"
+}
+field_assign = { ident ~ ":" ~ expr }
+
+lambda_expr = { ident ~ "->" ~ expr }
+
+ok_expr  = { "Ok" ~ "(" ~ expr ~ ")" }
+err_expr = { "Err" ~ "(" ~ expr ~ ")" }
+pre_expr = { "pre" ~ "." ~ ident }
+
+list_lit = { "[" ~ (expr ~ ("," ~ expr)*)? ~ "]" }
+tuple_or_paren = { "(" ~ expr ~ ("," ~ expr)* ~ ")" }
+record_expr = { ident ~ "(" ~ field_assign ~ ("," ~ field_assign)* ~ ")" }
+
+ident_expr = { ident }
+
+// ── Patterns ─────────────────────────────────────────
+pattern = {
+    wildcard_pat
+  | ok_pat
+  | err_pat
+  | constructor_pat
+  | tuple_pat
+  | literal_pat
+  | ident_pat
+}
+
+wildcard_pat    = { "_" }
+ok_pat          = { "Ok" ~ "(" ~ pattern ~ ")" }
+err_pat         = { "Err" ~ "(" ~ pattern ~ ")" }
+constructor_pat = { ident ~ "(" ~ pattern ~ ("," ~ pattern)* ~ ")" }
+tuple_pat       = { "(" ~ pattern ~ ("," ~ pattern)+ ~ ")" }
+literal_pat     = { integer_lit | string_lit | bool_lit }
+ident_pat       = { ident }
+
+// ── Operators ────────────────────────────────────────
+compare_op = { "==" | "/=" | "<=" | ">=" | "<" | ">" }
+add_op     = { "+" | "-" }
+mul_op     = { "*" | "/" | "%" }
+
+// ── Identifier ───────────────────────────────────────
+ident = @{ !keyword ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+keyword = @{
+    ("fn" | "flow" | "entity" | "enum" | "state" | "type" | "effect"
+    | "ns" | "use" | "let" | "if" | "then" | "else" | "match" | "return"
+    | "require" | "ensure" | "where" | "with" | "and" | "or" | "not"
+    | "implies" | "true" | "false" | "void" | "self" | "pre" | "Ok" | "Err"
+    | "step" | "rollback" | "transaction" | "endpoint" | "handler" | "main"
+    | "input" | "output" | "nothing" | "invariant")
+    ~ !(ASCII_ALPHANUMERIC | "_")
+}
+
+// ── Whitespace & Structure ───────────────────────────
+WHITESPACE  = _{ " " | "\t" | "\r" | "\n" }
+COMMENT     = _{ "--" ~ (!("\r" | "\n") ~ ANY)* }
+BLOCK_START = { "\u{21E5}" }  // ⇥
+BLOCK_END   = { "\u{21E4}" }  // ⇤

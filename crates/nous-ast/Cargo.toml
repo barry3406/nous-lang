@@ -1,0 +1,7 @@
+[package]
+name = "nous-ast"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }

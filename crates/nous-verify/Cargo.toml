@@ -1,0 +1,11 @@
+[package]
+name = "nous-verify"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nous-ast = { workspace = true }
+nous-types = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

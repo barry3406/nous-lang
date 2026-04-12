@@ -1,0 +1,10 @@
+[package]
+name = "nous-parser"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nous-ast = { workspace = true }
+pest = { workspace = true }
+pest_derive = { workspace = true }
+thiserror = { workspace = true }
