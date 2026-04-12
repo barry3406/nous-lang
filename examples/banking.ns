@@ -1,0 +1,110 @@
+-- ============================================================
+-- Nous Example: Banking Transfer Service
+-- A complete, real-world service in Nous
+-- ============================================================
+
+ns banking
+
+-- ── Types ────────────────────────────────────────────────
+
+type AccountId = Text where self.len == 36
+type Money     = Dec(2) where self >= 0
+
+entity Account
+  id      : AccountId
+  owner   : Text where self.len > 0
+  balance : Money
+  status  : Active | Frozen | Closed
+
+  invariant status == Closed implies balance == 0
+
+enum TransferError
+  InsufficientFunds(available: Money, requested: Money)
+  AccountFrozen(id: AccountId)
+  AccountClosed(id: AccountId)
+  SameAccount
+
+-- ── State Machine ────────────────────────────────────────
+
+state AccountLifecycle
+  Active
+    -[freeze]-> Frozen
+    -[close]->  Closed     -- compiler verifies: invariant balance == 0
+  Frozen
+    -[unfreeze]-> Active
+    -[close]->    Closed
+  Closed                   -- terminal state, no transitions out
+
+-- ── Core Logic ───────────────────────────────────────────
+
+fn validate_transfer(from: Account, to: Account, amount: Money where self > 0) -> Result[Void, TransferError]
+  require from.id /= to.id       else SameAccount
+  require from.status == Active   else AccountFrozen(from.id)
+  require to.status == Active     else AccountFrozen(to.id)
+  require from.balance >= amount  else InsufficientFunds(from.balance, amount)
+  Ok(void)
+
+-- ── Transfer Flow ────────────────────────────────────────
+
+flow transfer(from_id: AccountId, to_id: AccountId, amount: Money where self > 0) -> Result[TransferRecord, TransferError]
+  ensure match result
+    Ok(r)  -> r.from_balance + r.to_balance == pre.from_balance + pre.to_balance
+    Err(_) -> accounts_unchanged
+  effect Db.write, Audit.log
+
+  step load =
+    let from = load_account(from_id)?
+    let to   = load_account(to_id)?
+    validate_transfer(from, to, amount)?
+    (from, to)
+    rollback: nothing
+
+  step execute =
+    transaction
+      let (from, to) = load.result
+      let new_from = { from with balance: from.balance - amount }
+      let new_to   = { to   with balance: to.balance   + amount }
+      save_account(new_from)
+      save_account(new_to)
+      (new_from, new_to)
+    rollback: transaction.rollback
+
+  step audit =
+    let (new_from, new_to) = execute.result
+    Audit.log(TransferEvent(from_id, to_id, amount, Time.now()))
+    TransferRecord(
+      from_balance: new_from.balance
+      to_balance:   new_to.balance
+      amount:       amount
+      timestamp:    Time.now()
+    )
+    rollback: nothing
+
+-- ── API ──────────────────────────────────────────────────
+
+endpoint POST /transfer
+  input
+    from_id : AccountId
+    to_id   : AccountId
+    amount  : Money where self > 0
+  output
+    200 : TransferRecord
+    400 : TransferError
+    500 : SystemError
+  handler
+    transfer(input.from_id, input.to_id, input.amount)
+
+-- ── Effect Handlers ──────────────────────────────────────
+
+handler ProductionBanking
+  Db     = postgres("banking_db")
+  Audit  = kafka("audit_topic")
+
+handler TestBanking
+  Db     = memory_store()
+  Audit  = memory_log()
+
+-- ── Entry Point ──────────────────────────────────────────
+
+main with [ProductionBanking]
+  serve(port: 8080)
