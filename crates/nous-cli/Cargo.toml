@@ -14,5 +14,6 @@ nous-types = { workspace = true }
 nous-verify = { workspace = true }
 nous-runtime = { workspace = true }
 clap = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 miette = { workspace = true }

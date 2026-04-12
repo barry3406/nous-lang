@@ -1,3 +1,5 @@
+mod repl;
+
 use std::path::PathBuf;
 use std::process;
 
@@ -41,6 +43,12 @@ enum Commands {
         /// Path to .ns source file
         file: PathBuf,
     },
+    /// Start interactive REPL
+    Repl {
+        /// Output JSON for AI consumption (default: human-friendly)
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() {
@@ -52,6 +60,7 @@ fn main() {
         Commands::Run { file } => cmd_run(&file),
         Commands::Emit { file } => cmd_emit(&file),
         Commands::Ast { file } => cmd_ast(&file),
+        Commands::Repl { json } => { repl::run_repl(json); Ok(()) },
     };
 
     if let Err(e) = result {

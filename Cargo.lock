@@ -411,6 +411,7 @@ dependencies = [
  "nous-runtime",
  "nous-types",
  "nous-verify",
+ "serde",
  "serde_json",
 ]
 
