@@ -686,17 +686,24 @@ fn build_expr(p: Pair<'_, Rule>) -> Result<Expr, ParseError> {
             Ok(Expr::RecordUpdate { base: Box::new(Spanned::new(base, bs)), updates })
         }
         Rule::if_expr => {
-            let mut parts = p.into_inner().filter(|c| c.as_rule() == Rule::expr);
-            let cond = parts.next().unwrap(); let cs = mk_span(&cond);
-            let then = parts.next().unwrap(); let ts = mk_span(&then);
-            let els = parts.next().map(|e| {
-                let s = mk_span(&e);
-                build_expr(e).map(|ex| Box::new(Spanned::new(ex, s)))
-            }).transpose()?;
+            let mut inner = p.into_inner();
+            // First child is the condition (expr)
+            let cond = inner.find(|c| c.as_rule() == Rule::expr).unwrap();
+            let cs = mk_span(&cond);
+            // Then if_branch for then, and optionally if_branch for else
+            let mut branches: Vec<_> = inner.filter(|c| c.as_rule() == Rule::if_branch).collect();
+            let then_branch_p = branches.remove(0);
+            let ts = mk_span(&then_branch_p);
+            let then_expr = build_if_branch(then_branch_p)?;
+            let else_branch = if !branches.is_empty() {
+                let else_p = branches.remove(0);
+                let es = mk_span(&else_p);
+                Some(Box::new(Spanned::new(build_if_branch(else_p)?, es)))
+            } else { None };
             Ok(Expr::If {
                 condition: Box::new(Spanned::new(build_expr(cond)?, cs)),
-                then_branch: Box::new(Spanned::new(build_expr(then)?, ts)),
-                else_branch: els,
+                then_branch: Box::new(Spanned::new(then_expr, ts)),
+                else_branch,
             })
         }
         Rule::match_expr => {
@@ -812,6 +819,38 @@ fn build_pattern(p: Pair<'_, Rule>) -> Result<Pattern, ParseError> {
             Ok(Pattern::Literal(build_expr(inner)?))
         }
         _ => Ok(Pattern::Wildcard),
+    }
+}
+
+/// Build an if-branch: either a block `BLOCK_START stmt* BLOCK_END` or a single expr.
+fn build_if_branch(p: Pair<'_, Rule>) -> Result<Expr, ParseError> {
+    let mut inner: Vec<_> = p.into_inner().filter(|c| !skip(c)).collect();
+    if inner.is_empty() {
+        return Ok(Expr::Void);
+    }
+    // If it's a single expr child, build it directly
+    if inner.len() == 1 && inner[0].as_rule() == Rule::expr {
+        return build_expr(inner.remove(0));
+    }
+    // Otherwise it's stmts from a block
+    let mut stmts = Vec::new();
+    for child in inner {
+        match child.as_rule() {
+            Rule::stmt => {
+                let span = mk_span(&child);
+                stmts.push(Spanned::new(build_stmt(child)?, span));
+            }
+            Rule::expr => {
+                let span = mk_span(&child);
+                stmts.push(Spanned::new(build_expr(child)?, span));
+            }
+            _ => {}
+        }
+    }
+    if stmts.len() == 1 {
+        Ok(stmts.remove(0).node)
+    } else {
+        Ok(Expr::Block(stmts))
     }
 }
 

@@ -85,6 +85,7 @@ impl FnRegistry {
 pub struct CompilerCtx {
     module: Module,
     fns: FnRegistry,
+    lambda_count: usize,
 }
 
 impl CompilerCtx {
@@ -93,6 +94,7 @@ impl CompilerCtx {
         Self {
             module: Module::new(),
             fns: FnRegistry::default(),
+            lambda_count: 0,
         }
     }
 
@@ -300,7 +302,7 @@ impl CompilerCtx {
     // -----------------------------------------------------------------------
 
     fn emit_require_checks(
-        &self,
+        &mut self,
         chunk: &mut Chunk,
         scope: &mut Scope,
         contract: &Contract,
@@ -314,7 +316,7 @@ impl CompilerCtx {
     }
 
     fn emit_ensure_checks(
-        &self,
+        &mut self,
         chunk: &mut Chunk,
         scope: &mut Scope,
         contract: &Contract,
@@ -354,7 +356,7 @@ impl CompilerCtx {
     // -----------------------------------------------------------------------
 
     fn compile_expr(
-        &self,
+        &mut self,
         chunk: &mut Chunk,
         scope: &mut Scope,
         expr: &Expr,
@@ -365,7 +367,7 @@ impl CompilerCtx {
     /// Core recursive expression compiler.  Emits instructions into `chunk`
     /// that, when executed, leave one value on top of the stack.
     fn compile_expr_into(
-        &self,
+        &mut self,
         chunk: &mut Chunk,
         scope: &mut Scope,
         expr: &Expr,
@@ -687,11 +689,37 @@ impl CompilerCtx {
                 }
                 chunk.emit(Op::MakeList(elems.len()));
             }
-            Expr::Lambda { .. } => {
-                // TODO: closure capture and lambda lifting
-                return Err(CompileError::Unsupported {
-                    description: "lambda / closure".into(),
+            Expr::Lambda { params, body } => {
+                // Compile the lambda as a standalone anonymous function chunk.
+                let lambda_id = self.lambda_count;
+                self.lambda_count += 1;
+                let lambda_name = format!("_lambda_{}", lambda_id);
+
+                // Build the lambda's scope with its parameters as locals.
+                let mut lambda_scope = Scope::default();
+                for param in params {
+                    lambda_scope.define(&param.name);
+                }
+
+                let mut lambda_chunk = Chunk::new(&lambda_name);
+                lambda_chunk.local_count = lambda_scope.next_slot;
+
+                // Compile the body into the lambda's chunk.
+                self.compile_expr_into(&mut lambda_chunk, &mut lambda_scope, &body.node)?;
+                lambda_chunk.emit(Op::Return);
+                lambda_chunk.local_count = lambda_scope.next_slot;
+
+                // Add the lambda's chunk to the module and register it.
+                let lambda_idx = self.module.add_chunk(lambda_chunk);
+                self.fns.register(&lambda_name, lambda_idx);
+
+                // In the parent chunk, emit a LoadConst of a Fn value pointing
+                // to the lambda's chunk.
+                let fn_val_idx = chunk.add_constant(Value::Fn {
+                    name: lambda_name,
+                    arity: params.len(),
                 });
+                chunk.emit(Op::LoadConst(fn_val_idx));
             }
             Expr::Pipe { value, func, args } => {
                 // Desugar: `x |> f(a, b)` → `f(x, a, b)`,  `x |> f` → `f(x)`
@@ -761,7 +789,7 @@ impl CompilerCtx {
     ///    an error string constant and `Halt` (the cleanest available
     ///    signalling mechanism given the current instruction set).
     fn compile_match(
-        &self,
+        &mut self,
         chunk: &mut Chunk,
         scope: &mut Scope,
         scrutinee: &Spanned<Expr>,
@@ -834,7 +862,7 @@ impl CompilerCtx {
     /// Returns `true` if the pattern always matches (Wildcard / Ident), in
     /// which case no `JumpIfFalse` is needed.
     fn emit_pattern_test(
-        &self,
+        &mut self,
         chunk: &mut Chunk,
         scope: &mut Scope,
         pattern: &Pattern,
@@ -954,7 +982,7 @@ impl CompilerCtx {
     /// After this call, all names introduced by `pattern` are bound in `scope`
     /// and stored in the appropriate local slots.
     fn emit_pattern_bindings(
-        &self,
+        &mut self,
         chunk: &mut Chunk,
         scope: &mut Scope,
         pattern: &Pattern,

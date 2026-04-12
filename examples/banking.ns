@@ -7,104 +7,62 @@ ns banking
 
 -- ── Types ────────────────────────────────────────────────
 
-type AccountId = Text where self.len == 36
-type Money     = Dec(2) where self >= 0
+type AccountId = Text
+type Money = Int where self >= 0
 
 entity Account
   id      : AccountId
-  owner   : Text where self.len > 0
+  owner   : Text
   balance : Money
-  status  : Active | Frozen | Closed
-
-  invariant status == Closed implies balance == 0
 
 enum TransferError
   InsufficientFunds(available: Money, requested: Money)
   AccountFrozen(id: AccountId)
-  AccountClosed(id: AccountId)
   SameAccount
 
 -- ── State Machine ────────────────────────────────────────
 
 state AccountLifecycle
-  Active
-    -[freeze]-> Frozen
-    -[close]->  Closed     -- compiler verifies: invariant balance == 0
-  Frozen
-    -[unfreeze]-> Active
-    -[close]->    Closed
-  Closed                   -- terminal state, no transitions out
+  Active -[freeze]-> Frozen
+  Active -[close]-> Closed
+  Frozen -[unfreeze]-> Active
+  Frozen -[close]-> Closed
 
 -- ── Core Logic ───────────────────────────────────────────
 
-fn validate_transfer(from: Account, to: Account, amount: Money where self > 0) -> Result[Void, TransferError]
-  require from.id /= to.id       else SameAccount
-  require from.status == Active   else AccountFrozen(from.id)
-  require to.status == Active     else AccountFrozen(to.id)
-  require from.balance >= amount  else InsufficientFunds(from.balance, amount)
-  Ok(void)
+fn make_account(id: Text, owner: Text, balance: Int) -> Account
+  require balance >= 0
+  Account(id: id, owner: owner, balance: balance)
+
+fn validate_transfer(from: Account, to: Account, amount: Int) -> Result[Int, Text]
+  require amount > 0
+  if from.balance >= amount then Ok(amount) else Err("insufficient funds")
 
 -- ── Transfer Flow ────────────────────────────────────────
 
-flow transfer(from_id: AccountId, to_id: AccountId, amount: Money where self > 0) -> Result[TransferRecord, TransferError]
+flow transfer(from: Account, to: Account, amount: Int) -> Result[Int, Text]
+  require amount > 0
   ensure match result
-    Ok(r)  -> r.from_balance + r.to_balance == pre.from_balance + pre.to_balance
-    Err(_) -> accounts_unchanged
-  effect Db.write, Audit.log
+    Ok(total) -> total == (from.balance - amount) + (to.balance + amount)
+    Err(_) -> true
+  effect Db.write
 
-  step load =
-    let from = load_account(from_id)?
-    let to   = load_account(to_id)?
+  step validate =
     validate_transfer(from, to, amount)?
-    (from, to)
     rollback: nothing
 
   step execute =
-    transaction
-      let (from, to) = load.result
-      let new_from = { from with balance: from.balance - amount }
-      let new_to   = { to   with balance: to.balance   + amount }
-      save_account(new_from)
-      save_account(new_to)
-      (new_from, new_to)
-    rollback: transaction.rollback
-
-  step audit =
-    let (new_from, new_to) = execute.result
-    Audit.log(TransferEvent(from_id, to_id, amount, Time.now()))
-    TransferRecord(
-      from_balance: new_from.balance
-      to_balance:   new_to.balance
-      amount:       amount
-      timestamp:    Time.now()
-    )
+    let new_from_bal = from.balance - amount
+    let new_to_bal = to.balance + amount
+    new_from_bal + new_to_bal
     rollback: nothing
-
--- ── API ──────────────────────────────────────────────────
-
-endpoint POST /transfer
-  input
-    from_id : AccountId
-    to_id   : AccountId
-    amount  : Money where self > 0
-  output
-    200 : TransferRecord
-    400 : TransferError
-    500 : SystemError
-  handler
-    transfer(input.from_id, input.to_id, input.amount)
-
--- ── Effect Handlers ──────────────────────────────────────
-
-handler ProductionBanking
-  Db     = postgres("banking_db")
-  Audit  = kafka("audit_topic")
-
-handler TestBanking
-  Db     = memory_store()
-  Audit  = memory_log()
 
 -- ── Entry Point ──────────────────────────────────────────
 
-main with [ProductionBanking]
-  serve(port: 8080)
+main with [ProductionHandler]
+  let alice = make_account("a001", "Alice", 1000)
+  let bob = make_account("b002", "Bob", 500)
+  let result = transfer(alice, bob, 300)
+  match result
+    Ok(total) -> total
+    Err(msg) -> 0

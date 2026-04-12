@@ -6,128 +6,64 @@
 
 ns agent.actions
 
--- ── Tool Definitions ─────────────────────────────────────
--- An agent's tools are just Nous functions with contracts.
--- The LLM reads the contracts to understand what it can call.
+-- ── Types ────────────────────────────────────────────────
 
-type SearchQuery = Text where self.len > 0 and self.len <= 500
-type Url = Text where self starts_with "http"
-type FilePath = Text where self not_contains ".."  -- path traversal prevention at type level
+type SearchQuery = Text
+type Budget = Int where self >= 0
 
-fn web_search(query: SearchQuery, max_results: Nat where 1 <= self <= 20) -> Result[List[SearchResult], ToolError]
-  ensure match result
-    Ok(rs) -> rs.len <= max_results
-    Err(_) -> true
-  effect Http.request
+entity SearchResult
+  url : Text
+  title : Text
+  score : Int
 
-fn read_file(path: FilePath) -> Result[Text, ToolError]
-  require path not_contains "/etc/passwd"   -- security constraints are first-class
-  require path not_contains "/private"
-  effect Fs.read
-
-fn write_file(path: FilePath, content: Text) -> Result[Void, ToolError]
-  require path starts_with "/workspace"     -- sandboxed writes
-  effect Fs.write
-
-fn execute_code(lang: Python | Javascript | Nous, code: Text where self.len <= 10000) -> Result[ExecutionResult, ToolError]
-  ensure match result
-    Ok(r) -> r.runtime <= Duration.seconds(30)
-    Err(_) -> true
-  effect Sandbox.execute
-
--- ── Agent Planning ───────────────────────────────────────
+-- ── Agent Planning State Machine ─────────────────────────
 
 state AgentTask
-  Pending
-    -[plan]->     Planning
-  Planning
-    -[approve]->  Executing
-    -[reject]->   Failed
-    -[replan]->   Planning
-  Executing
-    -[complete]-> Completed
-    -[error]->    Planning     -- errors go back to planning, not failure
-    -[timeout]->  Failed
-  Completed                    -- terminal
-  Failed                       -- terminal
+  Pending -[plan]-> Planning
+  Planning -[approve]-> Executing
+  Planning -[reject]-> Failed
+  Planning -[replan]-> Planning
+  Executing -[complete]-> Completed
+  Executing -[error]-> Planning
+  Executing -[timeout]-> Failed
 
--- ── Multi-step Agent Flow ────────────────────────────────
+-- ── Tool Functions ───────────────────────────────────────
 
-flow research(question: Text where self.len > 0) -> Result[Report, AgentError]
-  ensure match result
-    Ok(r) -> r.sources.len > 0 and r.answer.len > 0
-    Err(_) -> true
-  effect Http.request, Fs.read
+fn web_search(query: Text, max_results: Int) -> Result[Int, Text]
+  require max_results > 0
+  require max_results <= 20
+  effect Http.request
+  Ok(max_results)
+
+fn call_llm(prompt: Text, budget: Budget) -> Result[Int, Text]
+  require budget > 0
+  effect Http.request
+  if budget >= 10 then Ok(budget - 10) else Err("budget exhausted")
+
+-- ── Agent Flow ───────────────────────────────────────────
+
+flow research(question: Text, budget: Budget) -> Result[Int, Text]
+  require budget > 0
+  effect Http.request
 
   step search =
-    let queries = decompose_question(question)
-    let results = queries |> map(q -> web_search(q, 10))  -- auto-parallelized
-    flatten(results?)
+    web_search(question, 10)?
     rollback: nothing
 
   step analyze =
-    let sources = search.result
-    let relevant = sources |> filter(s -> relevance_score(s, question) > 0.7)
-    require relevant.len > 0 else AgentError.NoRelevantSources
-    relevant
+    let count = search_result
+    if count > 0 then Ok(count) else Err("no results")
     rollback: nothing
 
   step synthesize =
-    let relevant = analyze.result
-    let answer = summarize(relevant, question)
-    Report(
-      question: question
-      answer:   answer
-      sources:  relevant |> map(.url)
-    )
+    let relevant = analyze_result
+    call_llm(question, budget)?
     rollback: nothing
 
--- ── Safety Constraints as Types ──────────────────────────
--- Instead of hoping the AI follows instructions,
--- make dangerous actions unrepresentable.
+-- ── Entry Point ──────────────────────────────────────────
 
-type UserMessage = Text where self.len <= 4000
-type SystemPrompt = Text  -- no constraint on length
-
--- The agent CANNOT send a system prompt where a user message is expected.
--- This is not a convention. It's a type error.
-fn chat(system: SystemPrompt, user: UserMessage) -> Result[Text, ToolError]
-  effect Http.request
-
--- Budget tracking as types, not afterthoughts
-type Budget = Dec(4) where self >= 0
-type Cost   = Dec(4) where self >= 0
-
-fn call_llm(prompt: Text, budget: Budget) -> Result[(Text, Cost), ToolError]
-  ensure match result
-    Ok((_, cost)) -> cost <= budget
-    Err(_) -> true
-  effect Http.request
-
--- ── Orchestrator ─────────────────────────────────────────
-
-flow agent_loop(task: Text, budget: Budget) -> Result[Text, AgentError]
-  ensure match result
-    Ok(_) -> total_cost <= budget   -- mathematically guaranteed budget compliance
-    Err(_) -> true
-  effect Http.request, Fs.read, Fs.write
-
-  step plan =
-    let (plan, cost) = call_llm(task, budget)?
-    let remaining = budget - cost
-    (plan, remaining)
-    rollback: nothing
-
-  step execute =
-    let (plan, remaining) = plan.result
-    let steps = parse_plan(plan)
-    let (result, cost) = execute_steps(steps, remaining)?
-    let final_remaining = remaining - cost
-    (result, final_remaining)
-    rollback: revert_executed_steps
-
-  step respond =
-    let (result, remaining) = execute.result
-    let (answer, _) = call_llm(format_response(result), remaining)?
-    answer
-    rollback: nothing
+main with [ProductionHandler]
+  let result = research("what is nous", 100)
+  match result
+    Ok(remaining) -> remaining
+    Err(msg) -> 0

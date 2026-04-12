@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use nous_ast::decl::{Decl, EnumDecl, EntityDecl, FnDecl, FlowDecl, StateDecl};
+use nous_ast::expr::Expr;
 use nous_ast::types::TypeExpr;
 use nous_ast::{Program, Span};
 
@@ -82,6 +83,21 @@ impl TypeChecker {
                 // TODO: check EffectDecl — register effects for UndeclaredEffect checks
                 // TODO: check TypeDecl — validate the aliased type expression
                 // Namespace, Use, Main: no type-level checks needed yet.
+                _ => {}
+            }
+        }
+
+        // --- Phase 3: effect propagation checks ---------------------------
+        // For each fn/flow, verify that any function it calls does not carry
+        // effects that the caller has not declared.
+        for spanned_decl in &program.declarations {
+            match &spanned_decl.node {
+                Decl::Fn(decl) => {
+                    self.check_fn_effects(decl, spanned_decl.span, &mut errors);
+                }
+                Decl::Flow(decl) => {
+                    self.check_flow_effects(decl, spanned_decl.span, &mut errors);
+                }
                 _ => {}
             }
         }
@@ -315,6 +331,68 @@ impl TypeChecker {
     }
 
     // -----------------------------------------------------------------------
+    // Effect propagation checking
+    // -----------------------------------------------------------------------
+
+    /// Check that a `fn` declaration does not call any function whose effects
+    /// are not declared by the caller.
+    fn check_fn_effects(
+        &self,
+        decl: &FnDecl,
+        span: Span,
+        errors: &mut Vec<TypeError>,
+    ) {
+        let caller_effects: HashSet<&str> =
+            decl.contract.effects.iter().map(String::as_str).collect();
+        let mut called: HashSet<String> = HashSet::new();
+        collect_calls_in_expr(&decl.body.node, &mut called);
+        self.check_effect_leakage(&decl.name, span, &caller_effects, &called, errors);
+    }
+
+    /// Check that a `flow` declaration does not call any function whose effects
+    /// are not declared by the caller.
+    fn check_flow_effects(
+        &self,
+        decl: &FlowDecl,
+        span: Span,
+        errors: &mut Vec<TypeError>,
+    ) {
+        let caller_effects: HashSet<&str> =
+            decl.contract.effects.iter().map(String::as_str).collect();
+        let mut called: HashSet<String> = HashSet::new();
+        for step in &decl.steps {
+            collect_calls_in_expr(&step.body.node, &mut called);
+            collect_calls_in_expr(&step.rollback.node, &mut called);
+        }
+        self.check_effect_leakage(&decl.name, span, &caller_effects, &called, errors);
+    }
+
+    /// For each function in `called_fns` that the environment knows about,
+    /// emit `UndeclaredEffect` for every effect not covered by `caller_effects`.
+    fn check_effect_leakage(
+        &self,
+        fn_name: &str,
+        span: Span,
+        caller_effects: &HashSet<&str>,
+        called_fns: &HashSet<String>,
+        errors: &mut Vec<TypeError>,
+    ) {
+        for callee_name in called_fns {
+            if let Some(sig) = self.env.lookup_fn(callee_name) {
+                for effect in &sig.effects {
+                    if !caller_effects.contains(effect.as_str()) {
+                        errors.push(TypeError::UndeclaredEffect {
+                            effect: effect.clone(),
+                            fn_name: fn_name.to_owned(),
+                            span,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // Type expression validation helper
     // -----------------------------------------------------------------------
 
@@ -371,6 +449,113 @@ impl TypeChecker {
                 // Always valid; no further checking needed.
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Effect tracking helpers
+// ---------------------------------------------------------------------------
+
+/// Walk an expression tree and collect the names of all directly-called
+/// functions (i.e. `Call { func: Ident(name), .. }` patterns).
+///
+/// This is intentionally shallow: it only recognises named calls, not
+/// higher-order function applications through variables or lambdas.
+fn collect_calls_in_expr(expr: &Expr, out: &mut HashSet<String>) {
+    match expr {
+        Expr::Call { func, args } => {
+            if let Expr::Ident(name) = &func.node {
+                out.insert(name.clone());
+            }
+            // Recurse into the callee and each argument.
+            collect_calls_in_expr(&func.node, out);
+            for arg in args {
+                collect_calls_in_expr(&arg.node, out);
+            }
+        }
+        Expr::Pipe { value, func, args } => {
+            if let Expr::Ident(name) = &func.node {
+                out.insert(name.clone());
+            }
+            collect_calls_in_expr(&value.node, out);
+            collect_calls_in_expr(&func.node, out);
+            for arg in args {
+                collect_calls_in_expr(&arg.node, out);
+            }
+        }
+        Expr::BinOp { left, right, .. } => {
+            collect_calls_in_expr(&left.node, out);
+            collect_calls_in_expr(&right.node, out);
+        }
+        Expr::UnaryOp { operand, .. } => {
+            collect_calls_in_expr(&operand.node, out);
+        }
+        Expr::Let { value, .. } => {
+            collect_calls_in_expr(&value.node, out);
+        }
+        Expr::Block(stmts) => {
+            for s in stmts {
+                collect_calls_in_expr(&s.node, out);
+            }
+        }
+        Expr::If { condition, then_branch, else_branch } => {
+            collect_calls_in_expr(&condition.node, out);
+            collect_calls_in_expr(&then_branch.node, out);
+            if let Some(eb) = else_branch {
+                collect_calls_in_expr(&eb.node, out);
+            }
+        }
+        Expr::Match { scrutinee, arms } => {
+            collect_calls_in_expr(&scrutinee.node, out);
+            for arm in arms {
+                collect_calls_in_expr(&arm.body.node, out);
+            }
+        }
+        Expr::Record { fields, .. } => {
+            for (_, v) in fields {
+                collect_calls_in_expr(&v.node, out);
+            }
+        }
+        Expr::RecordUpdate { base, updates } => {
+            collect_calls_in_expr(&base.node, out);
+            for (_, v) in updates {
+                collect_calls_in_expr(&v.node, out);
+            }
+        }
+        Expr::Tuple(elems) | Expr::List(elems) => {
+            for e in elems {
+                collect_calls_in_expr(&e.node, out);
+            }
+        }
+        Expr::Lambda { body, .. } => {
+            collect_calls_in_expr(&body.node, out);
+        }
+        Expr::Return(inner)
+        | Expr::Ok(inner)
+        | Expr::Err(inner)
+        | Expr::Try(inner)
+        | Expr::Primed(inner)
+        | Expr::Pre(inner)
+        | Expr::Transaction(inner) => {
+            collect_calls_in_expr(&inner.node, out);
+        }
+        Expr::FieldAccess { object, .. } => {
+            collect_calls_in_expr(&object.node, out);
+        }
+        Expr::Require { condition, else_expr } => {
+            collect_calls_in_expr(&condition.node, out);
+            if let Some(e) = else_expr {
+                collect_calls_in_expr(&e.node, out);
+            }
+        }
+        // Leaves: no sub-expressions to recurse into.
+        Expr::IntLit(_)
+        | Expr::DecLit(_)
+        | Expr::StringLit(_)
+        | Expr::BoolLit(_)
+        | Expr::Ident(_)
+        | Expr::SelfRef
+        | Expr::Void => {}
     }
 }
 

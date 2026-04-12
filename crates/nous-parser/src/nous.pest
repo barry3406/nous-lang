@@ -201,7 +201,11 @@ match_expr = {
 }
 match_arm = { pattern ~ "->" ~ expr }
 
-if_expr = { "if" ~ expr ~ "then" ~ expr ~ ("else" ~ expr)? }
+// if/then/else: supports both inline and block forms
+//   inline: if x > 0 then x else 0
+//   block:  if x > 0 then ⇥ ... ⇤ else ⇥ ... ⇤
+if_expr = { "if" ~ expr ~ "then" ~ if_branch ~ ("else" ~ if_branch)? }
+if_branch = { BLOCK_START ~ stmt* ~ BLOCK_END | expr }
 
 transaction_expr = { "transaction" ~ BLOCK_START ~ stmt* ~ BLOCK_END }
 
