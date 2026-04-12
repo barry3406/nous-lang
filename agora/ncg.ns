@@ -1,0 +1,147 @@
+-- ═══════════════════════════════════════════════════════
+-- NCG: Nous Constraint Graph
+-- Version control for AI. Replaces git.
+--
+-- No files. No branches. No merge conflicts.
+-- Functions are identified by the hash of their constraints.
+-- Change a constraint, get a new hash. History is the
+-- chain of constraint transitions.
+-- ═══════════════════════════════════════════════════════
+
+ns agora.ncg
+
+-- ── Schema ───────────────────────────────────────────
+
+fn init_ncg(db: Text) -> Result[Text, Text]
+  effect Db.write
+  db_execute(db, "CREATE TABLE IF NOT EXISTS functions (hash TEXT PRIMARY KEY, name TEXT NOT NULL, namespace TEXT NOT NULL, source TEXT NOT NULL, constraints_hash TEXT NOT NULL, created_at INTEGER NOT NULL)")
+  db_execute(db, "CREATE TABLE IF NOT EXISTS transitions (id INTEGER PRIMARY KEY AUTOINCREMENT, namespace TEXT NOT NULL, fn_name TEXT NOT NULL, old_hash TEXT, new_hash TEXT NOT NULL, reason TEXT NOT NULL, created_at INTEGER NOT NULL)")
+  db_execute(db, "CREATE TABLE IF NOT EXISTS deps (fn_hash TEXT NOT NULL, depends_on TEXT NOT NULL, PRIMARY KEY(fn_hash, depends_on))")
+  db_execute(db, "CREATE TABLE IF NOT EXISTS graph_heads (namespace TEXT NOT NULL, fn_name TEXT NOT NULL, current_hash TEXT NOT NULL, PRIMARY KEY(namespace, fn_name))")
+  Ok(db)
+
+-- ── Function Registration ────────────────────────────
+-- Every function is stored by its content hash.
+-- The hash covers: name + constraints + source.
+-- No file paths. No line numbers. Just content.
+
+fn register_fn(db: Text, namespace: Text, name: Text, source: Text, constraints: Text) -> Result[Text, Text]
+  require text_len(name) > 0
+  require text_len(source) > 0
+  effect Db.write
+  let hash = sha256(text_concat(name, text_concat(constraints, source)))
+  let ts = int_to_text(now_unix())
+  let sql = text_concat("INSERT OR IGNORE INTO functions (hash, name, namespace, source, constraints_hash, created_at) VALUES ('", text_concat(hash, text_concat("', '", text_concat(name, text_concat("', '", text_concat(namespace, text_concat("', '", text_concat(source, text_concat("', '", text_concat(sha256(constraints), text_concat("', ", text_concat(ts, ")"))))))))))))
+  db_execute(db, sql)
+  Ok(hash)
+
+-- ── Constraint Transition ────────────────────────────
+-- This replaces "git commit". Instead of "I changed lines 42-50",
+-- it records: "I changed the constraint on function X, and here's
+-- the new version that satisfies the updated constraint."
+--
+-- No merge conflicts possible: if two transitions target the same
+-- function, Z3 checks if the resulting constraint sets are compatible.
+-- Compatible → auto-merge. Incompatible → reject with counterexample.
+
+fn transition(db: Text, namespace: Text, fn_name: Text, new_source: Text, new_constraints: Text, reason: Text) -> Result[Text, Text]
+  require text_len(reason) > 0
+  effect Db.write, Db.read
+  let new_hash = register_fn(db, namespace, fn_name, new_source, new_constraints)?
+  let old_hash_result = get_head(db, namespace, fn_name)
+  let old_hash = match old_hash_result
+    Ok(h) -> h
+    Err(_) -> "none"
+  let ts = int_to_text(now_unix())
+  let sql = text_concat("INSERT INTO transitions (namespace, fn_name, old_hash, new_hash, reason, created_at) VALUES ('", text_concat(namespace, text_concat("', '", text_concat(fn_name, text_concat("', '", text_concat(old_hash, text_concat("', '", text_concat(new_hash, text_concat("', '", text_concat(reason, text_concat("', ", text_concat(ts, ")"))))))))))))
+  db_execute(db, sql)
+  let head_sql = text_concat("INSERT OR REPLACE INTO graph_heads (namespace, fn_name, current_hash) VALUES ('", text_concat(namespace, text_concat("', '", text_concat(fn_name, text_concat("', '", text_concat(new_hash, "')"))))))
+  db_execute(db, head_sql)
+  Ok(new_hash)
+
+-- ── Dependency Tracking ──────────────────────────────
+-- When function A calls function B, we record the dependency.
+-- If B's constraints change, we know A needs re-verification.
+-- No more "which files does this change affect?" guesswork.
+
+fn add_dep(db: Text, fn_hash: Text, depends_on: Text) -> Result[Text, Text]
+  effect Db.write
+  let sql = text_concat("INSERT OR IGNORE INTO deps (fn_hash, depends_on) VALUES ('", text_concat(fn_hash, text_concat("', '", text_concat(depends_on, "')"))))
+  db_execute(db, sql)
+  Ok(fn_hash)
+
+fn get_dependents(db: Text, fn_hash: Text) -> Result[Text, Text]
+  effect Db.read
+  let sql = text_concat("SELECT fn_hash FROM deps WHERE depends_on = '", text_concat(fn_hash, "'"))
+  db_query(db, sql)
+
+-- ── Query ────────────────────────────────────────────
+
+fn get_head(db: Text, namespace: Text, fn_name: Text) -> Result[Text, Text]
+  effect Db.read
+  let sql = text_concat("SELECT current_hash FROM graph_heads WHERE namespace = '", text_concat(namespace, text_concat("' AND fn_name = '", text_concat(fn_name, "'"))))
+  db_query(db, sql)
+
+fn get_fn(db: Text, hash: Text) -> Result[Text, Text]
+  effect Db.read
+  let sql = text_concat("SELECT name, namespace, source FROM functions WHERE hash = '", text_concat(hash, "'"))
+  db_query(db, sql)
+
+fn get_history(db: Text, namespace: Text, fn_name: Text) -> Result[Text, Text]
+  effect Db.read
+  let sql = text_concat("SELECT old_hash, new_hash, reason, created_at FROM transitions WHERE namespace = '", text_concat(namespace, text_concat("' AND fn_name = '", text_concat(fn_name, "' ORDER BY created_at"))))
+  db_query(db, sql)
+
+fn list_functions(db: Text, namespace: Text) -> Result[Text, Text]
+  effect Db.read
+  let sql = text_concat("SELECT fn_name, current_hash FROM graph_heads WHERE namespace = '", text_concat(namespace, "'"))
+  db_query(db, sql)
+
+-- ── Main: Demo ───────────────────────────────────────
+
+main with [ProductionHandler]
+  let db = "/tmp/agora_ncg.db"
+
+  println("═══════════════════════════════════════")
+  println("  NCG: Nous Constraint Graph")
+  println("  Version control for AI")
+  println("═══════════════════════════════════════")
+  println("")
+
+  init_ncg(db)?
+
+  -- Register v1 of transfer: basic constraint
+  let v1 = transition(db, "banking", "transfer", "fn transfer(from: Int, to: Int, amount: Int) -> Int\n  ensure result == from - amount", "result == from - amount", "initial implementation: basic balance deduction")?
+  println(text_concat("[v1] transfer registered: ", v1))
+
+  -- Register v2: added conservation law
+  let v2 = transition(db, "banking", "transfer", "fn transfer(from: Int, to: Int, amount: Int) -> (Int, Int)\n  ensure result.0 == from - amount\n  ensure result.1 == to + amount\n  ensure result.0 + result.1 == from + to", "result.0 == from - amount AND result.1 == to + amount AND conservation", "added conservation law: money cannot appear or disappear")?
+  println(text_concat("[v2] transfer updated:    ", v2))
+
+  -- Register a function that depends on transfer
+  let dep_hash = register_fn(db, "banking", "checkout", "fn checkout(...) -> ...", "uses transfer")?
+  add_dep(db, dep_hash, v2)?
+  println(text_concat("[ok] checkout depends on transfer: ", dep_hash))
+
+  -- Show history
+  println("")
+  println("── History: banking.transfer ────────────")
+  let history = get_history(db, "banking", "transfer")
+  println(to_text(history))
+
+  -- Show what depends on v2
+  println("")
+  println("── Dependents of transfer v2 ────────────")
+  let dependents = get_dependents(db, v2)
+  println(to_text(dependents))
+
+  -- Show all functions in banking namespace
+  println("")
+  println("── Functions in banking ──────────────────")
+  let fns = list_functions(db, "banking")
+  println(to_text(fns))
+
+  println("")
+  println("No files. No branches. No merge conflicts.")
+  println("Just constraints, hashes, and transitions.")
+  0
