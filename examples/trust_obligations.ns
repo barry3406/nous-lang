@@ -1,0 +1,71 @@
+-- ═══════════════════════════════════════════════════════
+-- Trust levels, obligations, and semantic capabilities
+-- Nous now distinguishes: proved / checked / observed / assumed
+-- ═══════════════════════════════════════════════════════
+
+ns trust_demo
+
+-- ── Pure computation: trust proved ───────────────────
+-- Z3 can prove this. The result is mathematical fact.
+
+fn add(a: Int, b: Int) -> Int
+  trust proved
+  ensure proved result == a + b
+
+-- ── Business rule: trust checked ─────────────────────
+-- Type-checked and runtime-enforced, but not formally proven
+-- for all inputs (depends on external state).
+
+fn apply_discount(price: Int, rate: Int) -> Int
+  require checked price >= 0
+  require checked rate >= 0
+  require checked rate <= 100
+  ensure checked result == price - ((price * rate) / 100)
+
+-- ── External system: trust observed ──────────────────
+-- We observe this works, but can't prove it.
+-- The result depends on an external HTTP call.
+
+fn fetch_exchange_rate(currency: Text) -> Int
+  trust observed
+  effect Http.request
+  obligation stale_rate "exchange rate may be outdated by up to 5 minutes"
+  100
+
+-- ── Capability with semantic properties ──────────────
+
+capability Payments.charge(order_id: Text, amount: Int) -> Text
+  idempotent_by order_id
+  timeout 30
+  compensate refund(order_id)
+  trust observed
+
+-- ── Flow that mixes trust levels ─────────────────────
+
+fn refund(order_id: Text) -> Text
+  trust observed
+  effect Http.request
+  text_concat("refunded:", order_id)
+
+flow checkout(price: Int, currency: Text) -> Result[Int, Text]
+  require proved price > 0
+  effect Http.request
+  obligation duplicate_charge "must guarantee at-most-once charging"
+  obligation stale_pricing "exchange rate may drift during checkout"
+
+  step convert =
+    let rate = fetch_exchange_rate(currency)
+    let converted = (price * rate) / 100
+    converted
+    rollback: nothing
+
+  step discount =
+    let final_price = apply_discount(convert_result, 10)
+    final_price
+    rollback: nothing
+
+main with [ProductionHandler]
+  let result = checkout(5000, "USD")
+  match result
+    Ok(final_price) -> final_price
+    Err(msg) -> 0

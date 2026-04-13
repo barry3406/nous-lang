@@ -72,7 +72,7 @@ pub fn synthesize_from_contract(
     let mut explanations: Vec<String> = Vec::new();
 
     for ensure in &contract.ensures {
-        if let Some((target, value_expr)) = extract_equality(&ensure.node) {
+        if let Some((target, value_expr)) = extract_equality(&ensure.condition.node) {
             match target {
                 AssignTarget::WholeResult => {
                     let synthesized = substitute_params(value_expr);

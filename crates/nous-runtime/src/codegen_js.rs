@@ -40,8 +40,8 @@ pub fn compile_to_js(program: &Program) -> String {
             Decl::Flow(f) => emit_flow(&mut out, f),
             Decl::Main(m) => emit_main(&mut out, m),
             Decl::Namespace(_) | Decl::Use(_) | Decl::Type(_)
-            | Decl::State(_) | Decl::Effect(_) | Decl::Endpoint(_)
-            | Decl::Handler(_) => {} // skip non-code declarations
+            | Decl::State(_) | Decl::Effect(_) | Decl::Capability(_)
+            | Decl::Endpoint(_) | Decl::Handler(_) => {}
         }
     }
 
@@ -104,7 +104,7 @@ fn emit_fn(out: &mut String, f: &FnDecl) {
     if body_empty && !f.contract.ensures.is_empty() {
         // Synthesize from ensures: find `result == expr` pattern
         for ensure in &f.contract.ensures {
-            if let Some(expr) = extract_result_assignment(&ensure.node) {
+            if let Some(expr) = extract_result_assignment(&ensure.condition.node) {
                 let js = expr_to_js(expr);
                 out.push_str(&format!("  return {js};\n"));
                 break;
@@ -122,7 +122,7 @@ fn emit_fn(out: &mut String, f: &FnDecl) {
 
     // Emit ensures as assertions (dev mode)
     for ensure in &f.contract.ensures {
-        let cond = expr_to_js(&ensure.node);
+        let cond = expr_to_js(&ensure.condition.node);
         out.push_str(&format!("  // ensure: {cond}\n"));
     }
 

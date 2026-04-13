@@ -362,9 +362,9 @@ impl CompilerCtx {
             chunk.emit(Op::StoreLocal(result_slot));
 
             // Compile the ensure predicate.  It may reference `result`.
-            self.compile_expr_into(chunk, scope, &ensure.node)?;
+            self.compile_expr_into(chunk, scope, &ensure.condition.node)?;
 
-            let msg = format!("ensure violated: {}", expr_preview(&ensure.node));
+            let msg = format!("ensure violated: {}", expr_preview(&ensure.condition.node));
             chunk.emit(Op::CheckEnsure(msg));
         }
 

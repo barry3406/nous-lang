@@ -163,6 +163,22 @@ impl Verifier {
             self.check_contract(&decl.name, &decl.contract);
         }
         self.check_declared_effects(&decl.name, &decl.contract);
+
+        // Report trust level
+        if decl.contract.trust != nous_ast::decl::TrustLevel::Checked {
+            self.warnings.push(format!(
+                "`{}` trust level: {:?}", decl.name, decl.contract.trust
+            ));
+        }
+
+        // Report obligations as unresolved risks
+        for obligation in &decl.contract.obligations {
+            let desc = obligation.description.as_deref().unwrap_or("no description");
+            self.warnings.push(format!(
+                "OBLIGATION `{}` in `{}`: {desc} [unresolved — must be addressed]",
+                obligation.name, decl.name
+            ));
+        }
     }
 
     fn visit_flow_decl(&mut self, decl: &FlowDecl, _decl_span: Span) {
@@ -172,6 +188,34 @@ impl Verifier {
         // Also inspect each step body for nested requires.
         for step in &decl.steps {
             self.collect_inline_requires(&decl.name, &step.body.node, step.body.span);
+        }
+
+        // Report trust level
+        if decl.contract.trust != nous_ast::decl::TrustLevel::Checked {
+            self.warnings.push(format!(
+                "flow `{}` trust level: {:?}", decl.name, decl.contract.trust
+            ));
+        }
+
+        // Report obligations
+        for obligation in &decl.contract.obligations {
+            let desc = obligation.description.as_deref().unwrap_or("no description");
+            self.warnings.push(format!(
+                "OBLIGATION `{}` in flow `{}`: {desc} [unresolved — must be addressed]",
+                obligation.name, decl.name
+            ));
+        }
+
+        // Check flow steps for missing rollbacks (observed trust items)
+        for step in &decl.steps {
+            let has_rollback = !matches!(&step.rollback.node, Expr::Void)
+                && !matches!(&step.rollback.node, Expr::Ident(n) if n == "nothing");
+            if !has_rollback {
+                self.warnings.push(format!(
+                    "flow `{}` step `{}` has no rollback — if this step has side effects, add a compensating action",
+                    decl.name, step.name
+                ));
+            }
         }
     }
 
@@ -345,10 +389,10 @@ impl Verifier {
             .collect();
 
         for ensure in &contract.ensures {
-            let span = ensure.span;
-            let constraint_text = expr_to_string(&ensure.node);
+            let span = ensure.condition.span;
+            let constraint_text = expr_to_string(&ensure.condition.node);
 
-            match smt::check_contract(&require_exprs, &ensure.node) {
+            match smt::check_contract(&require_exprs, &ensure.condition.node) {
                 SmtResult::Verified => {
                     self.verified_count += 1;
                 }
@@ -367,7 +411,7 @@ impl Verifier {
                 }
             }
 
-            if uses_primed_var(&ensure.node) {
+            if uses_primed_var(&ensure.condition.node) {
                 self.warnings.push(format!(
                     "ensure in `{fn_name}` uses primed variable; \
                      make sure the function mutates state: `{constraint_text}`"

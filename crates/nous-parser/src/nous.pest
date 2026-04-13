@@ -15,6 +15,7 @@ declaration = {
   | enum_decl
   | state_decl
   | effect_decl
+  | capability_decl
   | flow_decl
   | fn_decl
   | endpoint_decl
@@ -86,11 +87,39 @@ contract_clause = {
     require_clause
   | ensure_clause
   | effect_clause
+  | trust_clause
+  | obligation_clause
 }
 
-require_clause = { "require" ~ expr ~ ("else" ~ expr)? }
-ensure_clause  = { "ensure" ~ expr }
-effect_clause  = { "effect" ~ dotted_path ~ ("," ~ dotted_path)* }
+require_clause    = { "require" ~ trust_level? ~ expr ~ ("else" ~ expr)? }
+ensure_clause     = { "ensure" ~ trust_level? ~ expr }
+effect_clause     = { "effect" ~ dotted_path ~ ("," ~ dotted_path)* }
+trust_clause      = { "trust" ~ trust_level }
+obligation_clause = { "obligation" ~ ident ~ string_lit? }
+
+trust_level = { "proved" | "checked" | "observed" | "assumed" }
+
+// ── Capability declaration (semantic effects) ────────
+capability_decl = {
+    "capability" ~ dotted_path ~ "(" ~ param_list? ~ ")" ~ "->" ~ type_expr
+    ~ BLOCK_START ~ capability_attr* ~ BLOCK_END
+}
+
+capability_attr = {
+    cap_idempotent
+  | cap_timeout
+  | cap_compensate
+  | cap_retry
+  | cap_confirm
+  | cap_trust
+}
+
+cap_idempotent = { "idempotent_by" ~ ident }
+cap_timeout    = { "timeout" ~ integer_lit }
+cap_compensate = { "compensate" ~ expr }
+cap_retry      = { "retry" ~ integer_lit }
+cap_confirm    = { "confirm_by" ~ ident }
+cap_trust      = { "trust" ~ trust_level }
 
 // ── Flow declaration ─────────────────────────────────
 flow_decl = {

@@ -1166,7 +1166,7 @@ fn run_nous_verify(source: &str) -> VerifyPipelineResult {
                             let is_synth = matches!(&f.body.node, nous_ast::expr::Expr::Void)
                                 || matches!(&f.body.node, nous_ast::expr::Expr::Block(s) if s.is_empty());
                             constraints.push(ExtractedConstraint {
-                                text: format!("{:?}", ens.node).chars().take(100).collect(),
+                                text: format!("{:?}", ens.condition.node).chars().take(100).collect(),
                                 kind: if is_synth { "ensure (synthesized)".into() } else { "ensure".into() },
                             });
                         }

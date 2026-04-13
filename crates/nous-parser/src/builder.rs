@@ -1,6 +1,7 @@
 use pest::iterators::{Pair, Pairs};
 
 use nous_ast::decl::*;
+use nous_ast::decl::{TrustLevel, EnsureClause, Obligation};
 use nous_ast::expr::*;
 use nous_ast::program::Program;
 use nous_ast::span::{Span, Spanned};
@@ -71,6 +72,58 @@ fn build_decl(p: Pair<'_, Rule>) -> Result<Decl, ParseError> {
         Rule::effect_decl => {
             let dp = p.into_inner().next().unwrap();
             Ok(Decl::Effect(EffectDecl { name: dotted(dp).join(".") }))
+        }
+        Rule::capability_decl => {
+            let mut inner = content(p);
+            let dp = inner.next().unwrap();
+            let name = dotted(dp).join(".");
+            let mut params = Vec::new();
+            let mut return_type = Spanned::dummy(TypeExpr::Void);
+            let mut cap = CapabilityDecl {
+                name: name.clone(), params: vec![], return_type: Spanned::dummy(TypeExpr::Void),
+                idempotent_by: None, timeout: None, compensate: None,
+                retry: None, confirm_by: None, trust: TrustLevel::Observed,
+            };
+            for child in inner {
+                match child.as_rule() {
+                    Rule::param_list => params = build_params(child)?,
+                    Rule::type_expr => {
+                        let span = mk_span(&child);
+                        return_type = Spanned::new(build_type(child)?, span);
+                    }
+                    Rule::capability_attr => {
+                        let attr = child.into_inner().next().unwrap();
+                        match attr.as_rule() {
+                            Rule::cap_idempotent => {
+                                cap.idempotent_by = Some(attr.into_inner().next().unwrap().as_str().to_string());
+                            }
+                            Rule::cap_timeout => {
+                                cap.timeout = Some(attr.into_inner().next().unwrap().as_str().parse().unwrap_or(30));
+                            }
+                            Rule::cap_compensate => {
+                                let ep = attr.into_inner().next().unwrap();
+                                let span = mk_span(&ep);
+                                cap.compensate = Some(Spanned::new(build_expr(ep)?, span));
+                            }
+                            Rule::cap_retry => {
+                                cap.retry = Some(attr.into_inner().next().unwrap().as_str().parse().unwrap_or(3));
+                            }
+                            Rule::cap_confirm => {
+                                cap.confirm_by = Some(attr.into_inner().next().unwrap().as_str().to_string());
+                            }
+                            Rule::cap_trust => {
+                                let tl = attr.into_inner().next().unwrap();
+                                cap.trust = parse_trust_level(tl.as_str());
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            cap.params = params;
+            cap.return_type = return_type;
+            Ok(Decl::Capability(cap))
         }
         Rule::fn_decl => build_fn(p),
         Rule::flow_decl => build_flow(p),
@@ -177,7 +230,7 @@ fn build_fn(p: Pair<'_, Rule>) -> Result<Decl, ParseError> {
 
     let mut params = Vec::new();
     let mut return_type = Spanned::dummy(TypeExpr::Void);
-    let mut contract = Contract { requires: vec![], ensures: vec![], effects: vec![] };
+    let mut contract = Contract { requires: vec![], ensures: vec![], effects: vec![], trust: TrustLevel::default(), obligations: vec![] };
     let mut stmts: Vec<Spanned<Expr>> = Vec::new();
 
     for child in inner {
@@ -224,22 +277,57 @@ fn collect_contract(c: &mut Contract, p: Pair<'_, Rule>) -> Result<(), ParseErro
     let child = p.into_inner().next().unwrap();
     match child.as_rule() {
         Rule::require_clause => {
-            let mut parts = child.into_inner().filter(|x| x.as_rule() == Rule::expr);
-            let cond = parts.next().unwrap();
+            let mut trust = TrustLevel::Checked;
+            let mut exprs: Vec<_> = Vec::new();
+            for sub in child.into_inner() {
+                match sub.as_rule() {
+                    Rule::trust_level => trust = parse_trust_level(sub.as_str()),
+                    Rule::expr => exprs.push(sub),
+                    _ => {}
+                }
+            }
+            let cond = exprs.remove(0);
             let cond_span = mk_span(&cond);
-            let else_expr = parts.next().map(|e| {
+            let else_expr = if !exprs.is_empty() {
+                let e = exprs.remove(0);
                 let span = mk_span(&e);
-                build_expr(e).map(|ex| Spanned::new(ex, span))
-            }).transpose()?;
+                Some(Spanned::new(build_expr(e)?, span))
+            } else { None };
             c.requires.push(RequireClause {
                 condition: Spanned::new(build_expr(cond)?, cond_span),
                 else_expr,
+                trust,
             });
         }
         Rule::ensure_clause => {
-            let ep = child.into_inner().next().unwrap();
+            let mut trust = TrustLevel::Checked;
+            let mut expr_pair = None;
+            for sub in child.into_inner() {
+                match sub.as_rule() {
+                    Rule::trust_level => trust = parse_trust_level(sub.as_str()),
+                    Rule::expr => expr_pair = Some(sub),
+                    _ => {}
+                }
+            }
+            let ep = expr_pair.unwrap();
             let span = mk_span(&ep);
-            c.ensures.push(Spanned::new(build_expr(ep)?, span));
+            c.ensures.push(EnsureClause {
+                condition: Spanned::new(build_expr(ep)?, span),
+                trust,
+            });
+        }
+        Rule::trust_clause => {
+            let tl = child.into_inner().next().unwrap();
+            c.trust = parse_trust_level(tl.as_str());
+        }
+        Rule::obligation_clause => {
+            let mut inner = child.into_inner();
+            let name = ident_str(&mut inner);
+            let desc = inner.next().map(|s| {
+                let raw = s.as_str();
+                raw[1..raw.len()-1].to_string()
+            });
+            c.obligations.push(Obligation { name, description: desc });
         }
         Rule::effect_clause => {
             for dp in child.into_inner() {
@@ -261,7 +349,7 @@ fn build_flow(p: Pair<'_, Rule>) -> Result<Decl, ParseError> {
 
     let mut params = Vec::new();
     let mut return_type = Spanned::dummy(TypeExpr::Void);
-    let mut contract = Contract { requires: vec![], ensures: vec![], effects: vec![] };
+    let mut contract = Contract { requires: vec![], ensures: vec![], effects: vec![], trust: TrustLevel::default(), obligations: vec![] };
     let mut steps = Vec::new();
 
     for child in inner {
@@ -855,6 +943,16 @@ fn build_if_branch(p: Pair<'_, Rule>) -> Result<Expr, ParseError> {
 }
 
 // ── Utilities ────────────────────────────────────────
+
+fn parse_trust_level(s: &str) -> TrustLevel {
+    match s {
+        "proved" => TrustLevel::Proved,
+        "checked" => TrustLevel::Checked,
+        "observed" => TrustLevel::Observed,
+        "assumed" => TrustLevel::Assumed,
+        _ => TrustLevel::Checked,
+    }
+}
 
 fn dotted(p: Pair<'_, Rule>) -> Vec<String> {
     p.into_inner().filter(|c| c.as_rule() == Rule::ident).map(|c| c.as_str().to_string()).collect()

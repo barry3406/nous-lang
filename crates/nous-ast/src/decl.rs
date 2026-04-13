@@ -14,6 +14,7 @@ pub enum Decl {
     Enum(EnumDecl),
     State(StateDecl),
     Effect(EffectDecl),
+    Capability(CapabilityDecl),
     Fn(FnDecl),
     Flow(FlowDecl),
     Endpoint(EndpointDecl),
@@ -76,18 +77,65 @@ pub struct EffectDecl {
     pub name: String,
 }
 
+/// Trust level — how confident are we that a claim is true?
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TrustLevel {
+    /// Mathematically proven by Z3 SMT solver.
+    Proved,
+    /// Type-checked and runtime-enforced, but not formally proven.
+    Checked,
+    /// Based on observed external system behavior. May change.
+    Observed,
+    /// Explicitly assumed. No verification. Use at your own risk.
+    Assumed,
+}
+
+impl Default for TrustLevel {
+    fn default() -> Self { TrustLevel::Checked }
+}
+
+/// An obligation — a risk the compiler identified but the programmer hasn't resolved.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Obligation {
+    pub name: String,
+    pub description: Option<String>,
+}
+
 /// Contract clauses shared by fn and flow.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Contract {
     pub requires: Vec<RequireClause>,
-    pub ensures: Vec<Spanned<Expr>>,
+    pub ensures: Vec<EnsureClause>,
     pub effects: Vec<String>,
+    pub trust: TrustLevel,
+    pub obligations: Vec<Obligation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequireClause {
     pub condition: Spanned<Expr>,
     pub else_expr: Option<Spanned<Expr>>,
+    pub trust: TrustLevel,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnsureClause {
+    pub condition: Spanned<Expr>,
+    pub trust: TrustLevel,
+}
+
+/// Capability declaration — an external effect with semantic properties.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapabilityDecl {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub return_type: Spanned<TypeExpr>,
+    pub idempotent_by: Option<String>,
+    pub timeout: Option<i64>,
+    pub compensate: Option<Spanned<Expr>>,
+    pub retry: Option<i64>,
+    pub confirm_by: Option<String>,
+    pub trust: TrustLevel,
 }
 
 /// Function declaration.

@@ -478,7 +478,7 @@ impl TypeChecker {
     fn check_contract_clauses(
         &self,
         requires: &[nous_ast::decl::RequireClause],
-        ensures: &[Spanned<Expr>],
+        ensures: &[nous_ast::decl::EnsureClause],
         base_scope: &LocalScope,
         result_type: Option<&TypeExpr>,
         errors: &mut Vec<TypeError>,
@@ -503,7 +503,7 @@ impl TypeChecker {
         }
 
         for ensure in ensures {
-            self.check_constraint_expr(&ensure.node, ensure.span, &ensure_scope, errors);
+            self.check_constraint_expr(&ensure.condition.node, ensure.condition.span, &ensure_scope, errors);
         }
     }
 
