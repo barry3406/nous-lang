@@ -87,8 +87,32 @@ fn handle_request(conn: &Connection, docs: &HashMap<Url, String>, req: Request) 
             let resp = Response::new_ok(req.id, result);
             conn.sender.send(Message::Response(resp)).ok();
         }
+        "textDocument/diagnostic" => {
+            let params: DocumentDiagnosticParams =
+                serde_json::from_value(req.params).unwrap();
+            let uri = &params.text_document.uri;
+
+            let diagnostics = if let Some(source) = docs.get(uri) {
+                collect_diagnostics(source)
+            } else {
+                vec![]
+            };
+
+            let result = DocumentDiagnosticReport::Full(
+                RelatedFullDocumentDiagnosticReport {
+                    related_documents: None,
+                    full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                        result_id: None,
+                        items: diagnostics,
+                    },
+                }
+            );
+            let resp = Response::new_ok(req.id, result);
+            conn.sender.send(Message::Response(resp)).ok();
+        }
         _ => {
-            let resp = Response::new_err(req.id, -32601, "method not found".into());
+            // Silently ignore unknown methods instead of erroring
+            let resp = Response::new_ok(req.id, serde_json::Value::Null);
             conn.sender.send(Message::Response(resp)).ok();
         }
     }
@@ -123,6 +147,20 @@ fn handle_notification(conn: &Connection, docs: &mut HashMap<Url, String>, notif
 
 /// Parse + type check the document and publish diagnostics.
 fn publish_diagnostics(conn: &Connection, uri: &Url, source: &str) {
+    let diagnostics = collect_diagnostics(source);
+
+    let notif = Notification::new(
+        "textDocument/publishDiagnostics".into(),
+        PublishDiagnosticsParams {
+            uri: uri.clone(),
+            diagnostics,
+            version: None,
+        },
+    );
+    conn.sender.send(Message::Notification(notif)).ok();
+}
+
+fn collect_diagnostics(source: &str) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
     // Phase 1: Parse
@@ -218,15 +256,7 @@ fn publish_diagnostics(conn: &Connection, uri: &Url, source: &str) {
         }
     }
 
-    let notif = Notification::new(
-        "textDocument/publishDiagnostics".into(),
-        PublishDiagnosticsParams {
-            uri: uri.clone(),
-            diagnostics,
-            version: None,
-        },
-    );
-    conn.sender.send(Message::Notification(notif)).ok();
+    diagnostics
 }
 
 /// Get hover information at a position.
