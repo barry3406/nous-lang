@@ -801,6 +801,7 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "nous-ast",
+ "nous-parser",
  "nous-types",
  "nous-verify",
  "rusqlite",

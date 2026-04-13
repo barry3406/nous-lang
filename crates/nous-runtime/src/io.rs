@@ -456,6 +456,114 @@ fn handle_http_request(
             }
         }
 
+        // ── Agora proposal verification pipeline ──
+        // POST /api/proposals runs nous_verify on the source code
+        // and auto-merges if verification passes.
+        ("POST", "/api/proposals") => {
+            if let Ok(j) = serde_json::from_str::<serde_json::Value>(body) {
+                let namespace = j.get("namespace").and_then(|v| v.as_str()).unwrap_or("default");
+                let source = j.get("source").and_then(|v| v.as_str()).unwrap_or("");
+                if source.is_empty() {
+                    return ("400 Bad Request".into(), "application/json".into(),
+                        r#"{"error":"source required"}"#.into());
+                }
+
+                // Generate proposal ID
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default().as_secs() as i64;
+                use sha2::{Sha256, Digest as _};
+                let id = hex::encode(Sha256::digest(
+                    format!("{namespace}{source}{ts}").as_bytes()
+                ));
+
+                if let Ok(conn) = rusqlite::Connection::open(db_path) {
+                    // Store proposal as pending
+                    conn.execute(
+                        "INSERT INTO proposals (id, namespace, source, status, submitted_at) VALUES (?1, ?2, ?3, 'pending', ?4)",
+                        rusqlite::params![&id, namespace, source, ts],
+                    ).ok();
+
+                    // ═══ RUN NOUS VERIFICATION PIPELINE ═══
+                    let verify_result = run_nous_verify(source);
+
+                    if verify_result.passed {
+                        // AUTO-MERGE: verification passed
+                        conn.execute(
+                            "UPDATE proposals SET status = 'merged' WHERE id = ?1",
+                            rusqlite::params![&id],
+                        ).ok();
+
+                        // Store content-addressed blob
+                        let blob_hash = hex::encode(Sha256::digest(source.as_bytes()));
+                        conn.execute(
+                            "INSERT OR IGNORE INTO blobs (hash, content, created_at) VALUES (?1, ?2, ?3)",
+                            rusqlite::params![&blob_hash, source, ts],
+                        ).ok();
+
+                        // Extract and store constraints
+                        for constraint in &verify_result.constraints {
+                            conn.execute(
+                                "INSERT INTO constraints (namespace, constraint_text, kind, added_by_proposal) VALUES (?1, ?2, ?3, ?4)",
+                                rusqlite::params![namespace, &constraint.text, &constraint.kind, &id],
+                            ).ok();
+                        }
+
+                        // Post to chat
+                        conn.execute(
+                            "INSERT INTO chat (author, message, created_at) VALUES ('Agora', ?1, ?2)",
+                            rusqlite::params![
+                                format!("Proposal {} merged. {} constraint(s) verified by Z3. Proof, not persuasion.",
+                                    &id[..16], verify_result.verified_count),
+                                ts
+                            ],
+                        ).ok();
+
+                        let result = serde_json::json!({
+                            "ok": true,
+                            "id": id,
+                            "status": "merged",
+                            "verified": verify_result.verified_count,
+                            "unverified": verify_result.unverified_count,
+                            "blob_hash": blob_hash,
+                            "message": "verification passed — auto-merged"
+                        });
+                        ("201 Created".into(), "application/json".into(), result.to_string())
+                    } else {
+                        // REJECT: verification failed
+                        conn.execute(
+                            "UPDATE proposals SET status = 'rejected' WHERE id = ?1",
+                            rusqlite::params![&id],
+                        ).ok();
+
+                        // Post rejection to chat
+                        conn.execute(
+                            "INSERT INTO chat (author, message, created_at) VALUES ('Agora', ?1, ?2)",
+                            rusqlite::params![
+                                format!("Proposal {} rejected at {} phase: {}",
+                                    &id[..16], verify_result.failed_phase, verify_result.error_message),
+                                ts
+                            ],
+                        ).ok();
+
+                        let result = serde_json::json!({
+                            "ok": false,
+                            "id": id,
+                            "status": "rejected",
+                            "phase": verify_result.failed_phase,
+                            "error": verify_result.error_message,
+                            "message": "verification failed — rejected"
+                        });
+                        ("200 OK".into(), "application/json".into(), result.to_string())
+                    }
+                } else {
+                    ("500 Internal Server Error".into(), "application/json".into(), r#"{"error":"db"}"#.into())
+                }
+            } else {
+                ("400 Bad Request".into(), "application/json".into(), r#"{"error":"invalid json"}"#.into())
+            }
+        }
+
         // ── Generic table API ─────────────────────
         // Any table can be queried via /api/{table_name}
         // CRUD operations via GET/POST/PUT/DELETE
@@ -619,6 +727,88 @@ fn query_db(db_path: &str, sql: &str) -> String {
 }
 
 // ── Helpers ──────────────────────────────────────────
+
+// ── Nous Verification Pipeline ────────────────────────
+
+struct VerifyPipelineResult {
+    passed: bool,
+    verified_count: usize,
+    unverified_count: usize,
+    constraints: Vec<ExtractedConstraint>,
+    failed_phase: String,
+    error_message: String,
+}
+
+struct ExtractedConstraint {
+    text: String,
+    kind: String,
+}
+
+fn run_nous_verify(source: &str) -> VerifyPipelineResult {
+    // Phase 1: Parse
+    let program = match nous_parser::parse(source) {
+        Ok(p) => p,
+        Err(e) => return VerifyPipelineResult {
+            passed: false, verified_count: 0, unverified_count: 0,
+            constraints: vec![], failed_phase: "parse".into(),
+            error_message: e.to_string(),
+        },
+    };
+
+    // Phase 2: Type check
+    let mut checker = nous_types::TypeChecker::new();
+    if let Err(errors) = checker.check(&program) {
+        return VerifyPipelineResult {
+            passed: false, verified_count: 0, unverified_count: 0,
+            constraints: vec![], failed_phase: "typecheck".into(),
+            error_message: errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "),
+        };
+    }
+
+    // Phase 3: Z3 verification
+    let verifier = nous_verify::Verifier::new();
+    match verifier.verify(&program) {
+        Ok(result) => {
+            // Extract constraints from the AST
+            let mut constraints = Vec::new();
+            for decl in &program.declarations {
+                match &decl.node {
+                    nous_ast::decl::Decl::Fn(f) => {
+                        for req in &f.contract.requires {
+                            constraints.push(ExtractedConstraint {
+                                text: format!("{:?}", req.condition.node).chars().take(100).collect(),
+                                kind: "require".into(),
+                            });
+                        }
+                        for ens in &f.contract.ensures {
+                            let is_synth = matches!(&f.body.node, nous_ast::expr::Expr::Void)
+                                || matches!(&f.body.node, nous_ast::expr::Expr::Block(s) if s.is_empty());
+                            constraints.push(ExtractedConstraint {
+                                text: format!("{:?}", ens.node).chars().take(100).collect(),
+                                kind: if is_synth { "ensure (synthesized)".into() } else { "ensure".into() },
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            VerifyPipelineResult {
+                passed: true,
+                verified_count: result.verified_count,
+                unverified_count: result.unverified_count,
+                constraints,
+                failed_phase: String::new(),
+                error_message: String::new(),
+            }
+        }
+        Err(errors) => VerifyPipelineResult {
+            passed: false, verified_count: 0, unverified_count: 0,
+            constraints: vec![], failed_phase: "verify".into(),
+            error_message: errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; "),
+        },
+    }
+}
 
 fn require_text<'a>(args: &'a [Value], idx: usize, fn_name: &str) -> Result<&'a str, RuntimeError> {
     match args.get(idx) {

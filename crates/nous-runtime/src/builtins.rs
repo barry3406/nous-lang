@@ -50,6 +50,9 @@ impl Builtins {
         // Register I/O builtins
         crate::io::register_io_builtins(&mut b.fns);
 
+        // Nous self-verification: run the Nous compiler pipeline on source code
+        b.register("nous_verify", builtin_nous_verify);
+
         b
     }
 
@@ -216,4 +219,75 @@ fn builtin_now_unix(args: &[Value]) -> Result<Value, RuntimeError> {
         .unwrap_or_default()
         .as_secs();
     Ok(Value::Int(secs as i64))
+}
+
+/// Run the full Nous verification pipeline on source code.
+/// Args: (source: Text)
+/// Returns: Record { passed: Bool, verified: Int, unverified: Int, errors: Text, warnings: Text }
+fn builtin_nous_verify(args: &[Value]) -> Result<Value, RuntimeError> {
+    use std::collections::BTreeMap;
+
+    let source = match args.first() {
+        Some(Value::Text(s)) => s.as_str(),
+        _ => return Err(RuntimeError::TypeMismatch {
+            expected: "Text (nous source code)".into(),
+            got: args.first().map_or("nothing", |v| v.type_name()).into(),
+        }),
+    };
+
+    // Phase 1: Parse
+    let program = match nous_parser::parse(source) {
+        Ok(p) => p,
+        Err(e) => {
+            let mut fields = BTreeMap::new();
+            fields.insert("passed".into(), Value::Bool(false));
+            fields.insert("phase".into(), Value::Text("parse".into()));
+            fields.insert("verified".into(), Value::Int(0));
+            fields.insert("unverified".into(), Value::Int(0));
+            fields.insert("errors".into(), Value::Text(e.to_string()));
+            fields.insert("warnings".into(), Value::Text(String::new()));
+            return Ok(Value::Record { name: "VerifyResult".into(), fields });
+        }
+    };
+
+    // Phase 2: Type check
+    let mut checker = nous_types::TypeChecker::new();
+    if let Err(errors) = checker.check(&program) {
+        let err_str = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ");
+        let mut fields = BTreeMap::new();
+        fields.insert("passed".into(), Value::Bool(false));
+        fields.insert("phase".into(), Value::Text("typecheck".into()));
+        fields.insert("verified".into(), Value::Int(0));
+        fields.insert("unverified".into(), Value::Int(0));
+        fields.insert("errors".into(), Value::Text(err_str));
+        fields.insert("warnings".into(), Value::Text(String::new()));
+        return Ok(Value::Record { name: "VerifyResult".into(), fields });
+    }
+
+    // Phase 3: Z3 constraint verification
+    let verifier = nous_verify::Verifier::new();
+    match verifier.verify(&program) {
+        Ok(result) => {
+            let warn_str = result.warnings.join("; ");
+            let mut fields = BTreeMap::new();
+            fields.insert("passed".into(), Value::Bool(true));
+            fields.insert("phase".into(), Value::Text("verified".into()));
+            fields.insert("verified".into(), Value::Int(result.verified_count as i64));
+            fields.insert("unverified".into(), Value::Int(result.unverified_count as i64));
+            fields.insert("errors".into(), Value::Text(String::new()));
+            fields.insert("warnings".into(), Value::Text(warn_str));
+            Ok(Value::Record { name: "VerifyResult".into(), fields })
+        }
+        Err(errors) => {
+            let err_str = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("; ");
+            let mut fields = BTreeMap::new();
+            fields.insert("passed".into(), Value::Bool(false));
+            fields.insert("phase".into(), Value::Text("verify".into()));
+            fields.insert("verified".into(), Value::Int(0));
+            fields.insert("unverified".into(), Value::Int(0));
+            fields.insert("errors".into(), Value::Text(err_str));
+            fields.insert("warnings".into(), Value::Text(String::new()));
+            Ok(Value::Record { name: "VerifyResult".into(), fields })
+        }
+    }
 }
