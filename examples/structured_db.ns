@@ -1,0 +1,47 @@
+-- Structured database operations — no raw SQL
+
+ns db_demo
+
+entity Employee
+  tenant_id : Int
+  name : Text
+  email : Text
+  salary : Int
+  status : Text
+
+main with [ProductionHandler]
+  let db = "/tmp/nous_struct_test.db"
+
+  -- Create table from schema record
+  db_create_table(db, "employees", Employee(tenant_id: "INTEGER NOT NULL", name: "TEXT NOT NULL", email: "TEXT NOT NULL", salary: "INTEGER DEFAULT 0", status: "TEXT DEFAULT 'active'"))
+
+  -- Insert using records — no SQL
+  let id1 = db_insert(db, "employees", Employee(tenant_id: 1, name: "Alice", email: "alice@test.com", salary: 15000, status: "active"))?
+  let id2 = db_insert(db, "employees", Employee(tenant_id: 1, name: "Bob", email: "bob@test.com", salary: 12000, status: "active"))?
+  let id3 = db_insert(db, "employees", Employee(tenant_id: 2, name: "Charlie", email: "charlie@other.com", salary: 13000, status: "active"))?
+  println(text_concat("inserted: ", text_concat(int_to_text(id1), text_concat(", ", text_concat(int_to_text(id2), text_concat(", ", int_to_text(id3)))))))
+
+  -- Find all employees in tenant 1
+  let tenant1 = db_find(db, "employees", Employee(tenant_id: 1, name: "", email: "", salary: 0, status: ""))?
+  println(text_concat("tenant 1 count: ", int_to_text(list_len(tenant1))))
+
+  -- Find one by filtering
+  let alice = db_find_one(db, "employees", Employee(tenant_id: 1, name: "Alice", email: "", salary: 0, status: ""))?
+  println(text_concat("found: ", alice.name))
+
+  -- Update
+  db_update(db, "employees", id2, Employee(tenant_id: 1, name: "Bob", email: "bob@test.com", salary: 14000, status: "active"))?
+  println("updated Bob salary to 14000")
+
+  -- Count
+  let total = db_count(db, "employees")?
+  println(text_concat("total employees: ", int_to_text(total)))
+
+  -- Delete
+  db_delete(db, "employees", id3)?
+  println("deleted Charlie")
+
+  let remaining = db_count(db, "employees")?
+  println(text_concat("remaining: ", int_to_text(remaining)))
+
+  remaining

@@ -32,6 +32,15 @@ pub fn register_io_builtins(fns: &mut BTreeMap<String, NativeFn>) {
     fns.insert("db_execute".into(), builtin_db_execute);
     fns.insert("db_query".into(), builtin_db_query);
 
+    // ── Structured DB operations (no raw SQL) ────────
+    fns.insert("db_insert".into(), builtin_db_insert);
+    fns.insert("db_find".into(), builtin_db_find);
+    fns.insert("db_find_one".into(), builtin_db_find_one);
+    fns.insert("db_update".into(), builtin_db_update);
+    fns.insert("db_delete".into(), builtin_db_delete);
+    fns.insert("db_count".into(), builtin_db_count);
+    fns.insert("db_create_table".into(), builtin_db_create_table);
+
     // ── JSON ─────────────────────────────────────────
     fns.insert("json_parse".into(), builtin_json_parse);
     fns.insert("json_stringify".into(), builtin_json_stringify);
@@ -221,6 +230,258 @@ fn builtin_db_query(args: &[Value]) -> Result<Value, RuntimeError> {
             }
         }
         Err(e) => Ok(Value::Err(Box::new(Value::Text(e.to_string())))),
+    }
+}
+
+// ── Structured DB operations ─────────────────────────
+// These take Records and table names — no raw SQL needed.
+//
+// db_insert(db, "table", record)        → Ok(id)
+// db_find(db, "table", where_record)    → Ok([records])
+// db_find_one(db, "table", where_record)→ Ok(record) | Err
+// db_update(db, "table", id, record)    → Ok(count)
+// db_delete(db, "table", id)            → Ok(count)
+// db_count(db, "table", where_record)   → Ok(count)
+// db_create_table(db, "table", schema_record) → Ok(table)
+
+/// Extract columns and values from a Record. For inserts (all fields).
+fn record_to_cols_vals(record: &Value) -> Option<(Vec<String>, Vec<String>)> {
+    if let Value::Record { fields, .. } = record {
+        let mut cols = Vec::new();
+        let mut vals = Vec::new();
+        for (k, v) in fields {
+            cols.push(k.clone());
+            vals.push(match v {
+                Value::Text(s) => s.clone(),
+                Value::Int(n) => n.to_string(),
+                Value::Nat(n) => n.to_string(),
+                Value::Bool(b) => if *b { "1".into() } else { "0".into() },
+                Value::Void => "NULL".into(),
+                _ => format!("{v}"),
+            });
+        }
+        Some((cols, vals))
+    } else {
+        None
+    }
+}
+
+/// Extract only non-empty/non-zero fields for WHERE clauses.
+fn record_to_where(record: &Value) -> Option<(Vec<String>, Vec<String>)> {
+    if let Value::Record { fields, .. } = record {
+        let mut cols = Vec::new();
+        let mut vals = Vec::new();
+        for (k, v) in fields {
+            let (include, val) = match v {
+                Value::Text(s) if !s.is_empty() => (true, s.clone()),
+                Value::Int(n) if *n != 0 => (true, n.to_string()),
+                Value::Nat(n) if *n != 0 => (true, n.to_string()),
+                Value::Bool(b) => (true, if *b { "1".into() } else { "0".into() }),
+                _ => (false, String::new()),
+            };
+            if include {
+                cols.push(k.clone());
+                vals.push(val);
+            }
+        }
+        Some((cols, vals))
+    } else {
+        None
+    }
+}
+
+fn builtin_db_insert(args: &[Value]) -> Result<Value, RuntimeError> {
+    let db_path = require_text(args, 0, "db_insert")?;
+    let table = require_text(args, 1, "db_insert")?;
+    let record = args.get(2).ok_or_else(|| RuntimeError::TypeMismatch {
+        expected: "Record".into(), got: "missing".into(),
+    })?;
+    let (cols, vals) = record_to_cols_vals(record).ok_or_else(|| RuntimeError::TypeMismatch {
+        expected: "Record".into(), got: record.type_name().into(),
+    })?;
+    if let Ok(conn) = rusqlite::Connection::open(db_path) {
+        let placeholders: Vec<String> = (1..=cols.len()).map(|i| format!("?{i}")).collect();
+        let sql = format!("INSERT INTO [{}] ({}) VALUES ({})",
+            table, cols.join(", "), placeholders.join(", "));
+        let params: Vec<&dyn rusqlite::types::ToSql> = vals.iter()
+            .map(|v| v as &dyn rusqlite::types::ToSql).collect();
+        match conn.execute(&sql, params.as_slice()) {
+            Ok(_) => Ok(Value::Ok(Box::new(Value::Int(conn.last_insert_rowid())))),
+            Err(e) => Ok(Value::Err(Box::new(Value::Text(e.to_string())))),
+        }
+    } else {
+        Ok(Value::Err(Box::new(Value::Text("db connection failed".into()))))
+    }
+}
+
+fn builtin_db_find(args: &[Value]) -> Result<Value, RuntimeError> {
+    let db_path = require_text(args, 0, "db_find")?;
+    let table = require_text(args, 1, "db_find")?;
+    let where_record = args.get(2);
+
+    let (where_clause, where_vals) = if let Some(rec) = where_record {
+        if let Some((cols, vals)) = record_to_where(rec) {
+            if cols.is_empty() {
+                (String::new(), Vec::new())
+            } else {
+                let clauses: Vec<String> = cols.iter().enumerate()
+                    .map(|(i, c)| format!("{c} = ?{}", i + 1)).collect();
+                (format!(" WHERE {}", clauses.join(" AND ")), vals)
+            }
+        } else {
+            (String::new(), Vec::new())
+        }
+    } else {
+        (String::new(), Vec::new())
+    };
+
+    let sql = format!("SELECT * FROM [{}]{} ORDER BY rowid DESC LIMIT 500", table, where_clause);
+
+    if let Ok(conn) = rusqlite::Connection::open(db_path) {
+        match conn.prepare(&sql) {
+            Ok(mut stmt) => {
+                let col_count = stmt.column_count();
+                let col_names: Vec<String> = (0..col_count)
+                    .map(|i| stmt.column_name(i).unwrap_or("?").to_string()).collect();
+                let params: Vec<&dyn rusqlite::types::ToSql> = where_vals.iter()
+                    .map(|v| v as &dyn rusqlite::types::ToSql).collect();
+                let rows: Vec<Value> = stmt.query_map(params.as_slice(), |row| {
+                    let mut fields = BTreeMap::new();
+                    for (i, name) in col_names.iter().enumerate() {
+                        let val = match row.get_ref(i) {
+                            Ok(rusqlite::types::ValueRef::Integer(n)) => Value::Int(n),
+                            Ok(rusqlite::types::ValueRef::Text(s)) => Value::Text(String::from_utf8_lossy(s).into()),
+                            Ok(rusqlite::types::ValueRef::Real(f)) => Value::Int(f as i64),
+                            _ => Value::Void,
+                        };
+                        fields.insert(name.clone(), val);
+                    }
+                    Ok(Value::Record { name: table.to_string(), fields })
+                }).unwrap().filter_map(|r| r.ok()).collect();
+                Ok(Value::Ok(Box::new(Value::List(rows))))
+            }
+            Err(e) => Ok(Value::Err(Box::new(Value::Text(e.to_string())))),
+        }
+    } else {
+        Ok(Value::Err(Box::new(Value::Text("db connection failed".into()))))
+    }
+}
+
+fn builtin_db_find_one(args: &[Value]) -> Result<Value, RuntimeError> {
+    let result = builtin_db_find(args)?;
+    match result {
+        Value::Ok(inner) => match *inner {
+            Value::List(mut items) if !items.is_empty() => Ok(Value::Ok(Box::new(items.remove(0)))),
+            Value::List(_) => Ok(Value::Err(Box::new(Value::Text("not found".into())))),
+            other => Ok(Value::Ok(Box::new(other))),
+        },
+        err => Ok(err),
+    }
+}
+
+fn builtin_db_update(args: &[Value]) -> Result<Value, RuntimeError> {
+    let db_path = require_text(args, 0, "db_update")?;
+    let table = require_text(args, 1, "db_update")?;
+    let id = match args.get(2) {
+        Some(Value::Int(n)) => *n,
+        _ => return Err(RuntimeError::TypeMismatch { expected: "Int (id)".into(), got: "missing".into() }),
+    };
+    let record = args.get(3).ok_or_else(|| RuntimeError::TypeMismatch {
+        expected: "Record".into(), got: "missing".into(),
+    })?;
+    let (cols, vals) = record_to_cols_vals(record).ok_or_else(|| RuntimeError::TypeMismatch {
+        expected: "Record".into(), got: record.type_name().into(),
+    })?;
+    if cols.is_empty() {
+        return Ok(Value::Err(Box::new(Value::Text("no fields to update".into()))));
+    }
+    if let Ok(conn) = rusqlite::Connection::open(db_path) {
+        let sets: Vec<String> = cols.iter().enumerate()
+            .map(|(i, c)| format!("{c} = ?{}", i + 1)).collect();
+        let mut all_vals = vals;
+        all_vals.push(id.to_string());
+        let sql = format!("UPDATE [{}] SET {} WHERE id = ?{}", table, sets.join(", "), all_vals.len());
+        let params: Vec<&dyn rusqlite::types::ToSql> = all_vals.iter()
+            .map(|v| v as &dyn rusqlite::types::ToSql).collect();
+        match conn.execute(&sql, params.as_slice()) {
+            Ok(n) => Ok(Value::Ok(Box::new(Value::Int(n as i64)))),
+            Err(e) => Ok(Value::Err(Box::new(Value::Text(e.to_string())))),
+        }
+    } else {
+        Ok(Value::Err(Box::new(Value::Text("db connection failed".into()))))
+    }
+}
+
+fn builtin_db_delete(args: &[Value]) -> Result<Value, RuntimeError> {
+    let db_path = require_text(args, 0, "db_delete")?;
+    let table = require_text(args, 1, "db_delete")?;
+    let id = match args.get(2) {
+        Some(Value::Int(n)) => *n,
+        _ => return Err(RuntimeError::TypeMismatch { expected: "Int (id)".into(), got: "missing".into() }),
+    };
+    if let Ok(conn) = rusqlite::Connection::open(db_path) {
+        match conn.execute(&format!("DELETE FROM [{}] WHERE id = ?1", table), rusqlite::params![id]) {
+            Ok(n) => Ok(Value::Ok(Box::new(Value::Int(n as i64)))),
+            Err(e) => Ok(Value::Err(Box::new(Value::Text(e.to_string())))),
+        }
+    } else {
+        Ok(Value::Err(Box::new(Value::Text("db connection failed".into()))))
+    }
+}
+
+fn builtin_db_count(args: &[Value]) -> Result<Value, RuntimeError> {
+    let db_path = require_text(args, 0, "db_count")?;
+    let table = require_text(args, 1, "db_count")?;
+    let where_record = args.get(2);
+
+    let (where_clause, where_vals) = if let Some(rec) = where_record {
+        if let Some((cols, vals)) = record_to_cols_vals(rec) {
+            let clauses: Vec<String> = cols.iter().enumerate()
+                .map(|(i, c)| format!("{c} = ?{}", i + 1)).collect();
+            (format!(" WHERE {}", clauses.join(" AND ")), vals)
+        } else { (String::new(), Vec::new()) }
+    } else { (String::new(), Vec::new()) };
+
+    let sql = format!("SELECT COUNT(*) FROM [{}]{}", table, where_clause);
+    if let Ok(conn) = rusqlite::Connection::open(db_path) {
+        let params: Vec<&dyn rusqlite::types::ToSql> = where_vals.iter()
+            .map(|v| v as &dyn rusqlite::types::ToSql).collect();
+        match conn.query_row(&sql, params.as_slice(), |row| row.get::<_, i64>(0)) {
+            Ok(n) => Ok(Value::Ok(Box::new(Value::Int(n)))),
+            Err(e) => Ok(Value::Err(Box::new(Value::Text(e.to_string())))),
+        }
+    } else {
+        Ok(Value::Err(Box::new(Value::Text("db connection failed".into()))))
+    }
+}
+
+fn builtin_db_create_table(args: &[Value]) -> Result<Value, RuntimeError> {
+    let db_path = require_text(args, 0, "db_create_table")?;
+    let table = require_text(args, 1, "db_create_table")?;
+    let schema = args.get(2).ok_or_else(|| RuntimeError::TypeMismatch {
+        expected: "Record (schema)".into(), got: "missing".into(),
+    })?;
+
+    if let Value::Record { fields, .. } = schema {
+        let mut col_defs = vec!["id INTEGER PRIMARY KEY AUTOINCREMENT".to_string()];
+        for (col_name, col_type) in fields {
+            let sql_type = match col_type {
+                Value::Text(t) => t.clone(),
+                _ => "TEXT".into(),
+            };
+            col_defs.push(format!("{col_name} {sql_type}"));
+        }
+        let sql = format!("CREATE TABLE IF NOT EXISTS [{}] ({})", table, col_defs.join(", "));
+        if let Ok(conn) = rusqlite::Connection::open(db_path) {
+            match conn.execute_batch(&sql) {
+                Ok(()) => Ok(Value::Ok(Box::new(Value::Text(table.to_string())))),
+                Err(e) => Ok(Value::Err(Box::new(Value::Text(e.to_string())))),
+            }
+        } else {
+            Ok(Value::Err(Box::new(Value::Text("db connection failed".into()))))
+        }
+    } else {
+        Err(RuntimeError::TypeMismatch { expected: "Record (schema)".into(), got: schema.type_name().into() })
     }
 }
 
