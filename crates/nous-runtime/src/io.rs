@@ -456,26 +456,112 @@ fn handle_http_request(
             }
         }
 
-        // ── ERP routes (generic table access) ─────────
-        ("GET", "/api/employees") => {
-            let result = query_db(db_path, "SELECT id, name, email, department_id, role, status, salary, hire_date FROM employees ORDER BY id");
-            ("200 OK".into(), "application/json".into(), result)
+        // ── Generic table API ─────────────────────
+        // Any table can be queried via /api/{table_name}
+        // CRUD operations via GET/POST/PUT/DELETE
+        ("GET", p) if p.starts_with("/api/") => {
+            let table = &p[5..]; // strip "/api/"
+            if table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                let sql = format!("SELECT * FROM [{table}] ORDER BY rowid DESC LIMIT 200");
+                let result = query_db(db_path, &sql);
+                ("200 OK".into(), "application/json".into(), result)
+            } else {
+                ("400 Bad Request".into(), "application/json".into(), r#"{"error":"invalid table name"}"#.into())
+            }
         }
-        ("GET", "/api/departments") => {
-            let result = query_db(db_path, "SELECT id, name, budget FROM departments ORDER BY id");
-            ("200 OK".into(), "application/json".into(), result)
+
+        ("POST", p) if p.starts_with("/api/") => {
+            let table = &p[5..];
+            if !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                return ("400 Bad Request".into(), "application/json".into(), r#"{"error":"invalid table name"}"#.into());
+            }
+            if let Ok(j) = serde_json::from_str::<serde_json::Value>(body) {
+                if let Some(obj) = j.as_object() {
+                    if let Ok(conn) = rusqlite::Connection::open(db_path) {
+                        let cols: Vec<&str> = obj.keys().map(|k| k.as_str()).collect();
+                        let placeholders: Vec<String> = (1..=cols.len()).map(|i| format!("?{i}")).collect();
+                        let sql = format!("INSERT INTO [{table}] ({}) VALUES ({})", cols.join(","), placeholders.join(","));
+                        let values: Vec<String> = obj.values().map(|v| match v {
+                            serde_json::Value::String(s) => s.clone(),
+                            serde_json::Value::Number(n) => n.to_string(),
+                            serde_json::Value::Bool(b) => b.to_string(),
+                            _ => v.to_string(),
+                        }).collect();
+                        let params: Vec<&dyn rusqlite::types::ToSql> = values.iter().map(|v| v as &dyn rusqlite::types::ToSql).collect();
+                        match conn.execute(&sql, params.as_slice()) {
+                            Ok(_) => ("201 Created".into(), "application/json".into(), format!(r#"{{"ok":true,"id":{}}}"#, conn.last_insert_rowid())),
+                            Err(e) => ("400 Bad Request".into(), "application/json".into(), format!(r#"{{"error":"{}"}}"#, e.to_string().replace('"', "'"))),
+                        }
+                    } else {
+                        ("500 Internal Server Error".into(), "application/json".into(), r#"{"error":"db"}"#.into())
+                    }
+                } else {
+                    ("400 Bad Request".into(), "application/json".into(), r#"{"error":"expected object"}"#.into())
+                }
+            } else {
+                ("400 Bad Request".into(), "application/json".into(), r#"{"error":"invalid json"}"#.into())
+            }
         }
-        ("GET", "/api/attendance") => {
-            let result = query_db(db_path, "SELECT id, employee_id, date, check_in, check_out FROM attendance ORDER BY id DESC LIMIT 50");
-            ("200 OK".into(), "application/json".into(), result)
+
+        ("PUT", p) if p.starts_with("/api/") => {
+            let table = &p[5..];
+            if let Ok(j) = serde_json::from_str::<serde_json::Value>(body) {
+                let id = j.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+                if id == 0 {
+                    return ("400 Bad Request".into(), "application/json".into(), r#"{"error":"id required"}"#.into());
+                }
+                if let Some(obj) = j.as_object() {
+                    if let Ok(conn) = rusqlite::Connection::open(db_path) {
+                        let sets: Vec<String> = obj.iter()
+                            .filter(|(k, _)| k.as_str() != "id")
+                            .enumerate()
+                            .map(|(i, (k, _))| format!("{k} = ?{}", i + 1))
+                            .collect();
+                        if sets.is_empty() {
+                            return ("400 Bad Request".into(), "application/json".into(), r#"{"error":"no fields"}"#.into());
+                        }
+                        let values: Vec<String> = obj.iter()
+                            .filter(|(k, _)| k.as_str() != "id")
+                            .map(|(_, v)| match v {
+                                serde_json::Value::String(s) => s.clone(),
+                                serde_json::Value::Number(n) => n.to_string(),
+                                _ => v.to_string(),
+                            }).collect();
+                        let sql = format!("UPDATE [{table}] SET {} WHERE id = {id}", sets.join(", "));
+                        let params: Vec<&dyn rusqlite::types::ToSql> = values.iter().map(|v| v as &dyn rusqlite::types::ToSql).collect();
+                        match conn.execute(&sql, params.as_slice()) {
+                            Ok(n) => ("200 OK".into(), "application/json".into(), format!(r#"{{"ok":true,"updated":{n}}}"#)),
+                            Err(e) => ("400 Bad Request".into(), "application/json".into(), format!(r#"{{"error":"{}"}}"#, e.to_string().replace('"', "'"))),
+                        }
+                    } else {
+                        ("500 Internal Server Error".into(), "application/json".into(), r#"{"error":"db"}"#.into())
+                    }
+                } else {
+                    ("400 Bad Request".into(), "application/json".into(), r#"{"error":"expected object"}"#.into())
+                }
+            } else {
+                ("400 Bad Request".into(), "application/json".into(), r#"{"error":"invalid json"}"#.into())
+            }
         }
-        ("GET", "/api/leaves") => {
-            let result = query_db(db_path, "SELECT id, employee_id, leave_type, start_date, end_date, days, status, reason FROM leaves ORDER BY id DESC");
-            ("200 OK".into(), "application/json".into(), result)
-        }
-        ("GET", "/api/payroll") => {
-            let result = query_db(db_path, "SELECT employee_id, period, base_salary, deductions, bonus, net_pay FROM payroll ORDER BY employee_id");
-            ("200 OK".into(), "application/json".into(), result)
+
+        ("DELETE", p) if p.starts_with("/api/") => {
+            let table = &p[5..];
+            if let Ok(j) = serde_json::from_str::<serde_json::Value>(body) {
+                let id = j.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
+                if id == 0 {
+                    return ("400 Bad Request".into(), "application/json".into(), r#"{"error":"id required"}"#.into());
+                }
+                if let Ok(conn) = rusqlite::Connection::open(db_path) {
+                    match conn.execute(&format!("DELETE FROM [{table}] WHERE id = ?1"), rusqlite::params![id]) {
+                        Ok(n) => ("200 OK".into(), "application/json".into(), format!(r#"{{"ok":true,"deleted":{n}}}"#)),
+                        Err(e) => ("400 Bad Request".into(), "application/json".into(), format!(r#"{{"error":"{}"}}"#, e.to_string().replace('"', "'"))),
+                    }
+                } else {
+                    ("500 Internal Server Error".into(), "application/json".into(), r#"{"error":"db"}"#.into())
+                }
+            } else {
+                ("400 Bad Request".into(), "application/json".into(), r#"{"error":"invalid json"}"#.into())
+            }
         }
 
         ("GET", p) => {

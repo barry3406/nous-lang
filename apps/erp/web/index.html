@@ -16,8 +16,7 @@ nav a{display:block;padding:10px 20px;color:var(--text-dim);text-decoration:none
 nav a:hover{background:var(--accent-light);color:var(--accent);}
 nav a.active{background:var(--accent-light);color:var(--accent);font-weight:600;border-right:3px solid var(--accent);}
 .main{flex:1;overflow-y:auto;padding:24px 32px;}
-.page{display:none;}
-.page.active{display:block;}
+.page{display:none;}.page.active{display:block;}
 h2{font-size:20px;font-weight:600;margin-bottom:20px;}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px;}
 .stat-card{background:var(--surface);border-radius:12px;padding:20px;border:1px solid var(--border);}
@@ -26,22 +25,29 @@ h2{font-size:20px;font-weight:600;margin-bottom:20px;}
 .stat-card .sub{font-size:12px;color:var(--text-dim);margin-top:4px;}
 table{width:100%;border-collapse:collapse;background:var(--surface);border-radius:12px;overflow:hidden;border:1px solid var(--border);}
 th{text-align:left;padding:12px 16px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim);background:var(--bg);border-bottom:1px solid var(--border);}
-td{padding:12px 16px;border-bottom:1px solid var(--border);font-size:13px;}
+td{padding:10px 16px;border-bottom:1px solid var(--border);font-size:13px;}
 tr:last-child td{border-bottom:none;}
 tr:hover td{background:var(--accent-light);}
 .badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;}
-.badge.active{background:#d1fae5;color:#065f46;}
-.badge.onboarding{background:#fef3c7;color:#92400e;}
-.badge.suspended{background:#fee2e2;color:#991b1b;}
-.badge.terminated{background:#f3f4f6;color:#6b7280;}
-.badge.approved{background:#d1fae5;color:#065f46;}
-.badge.pending{background:#fef3c7;color:#92400e;}
-.badge.rejected{background:#fee2e2;color:#991b1b;}
-.badge.merged{background:#d1fae5;color:#065f46;}
+.badge.active{background:#d1fae5;color:#065f46;}.badge.onboarding{background:#fef3c7;color:#92400e;}.badge.suspended{background:#fee2e2;color:#991b1b;}.badge.terminated{background:#f3f4f6;color:#6b7280;}.badge.approved{background:#d1fae5;color:#065f46;}.badge.pending{background:#fef3c7;color:#92400e;}.badge.rejected{background:#fee2e2;color:#991b1b;}
 .section{background:var(--surface);border-radius:12px;padding:20px;border:1px solid var(--border);margin-bottom:20px;}
 .section-title{font-size:14px;font-weight:600;margin-bottom:12px;}
-.powered{text-align:center;padding:20px;color:var(--text-dim);font-size:11px;}
-.powered strong{color:var(--accent);}
+.btn{padding:6px 14px;border-radius:6px;border:none;font-size:12px;cursor:pointer;font-family:inherit;transition:all .15s;}
+.btn-primary{background:var(--accent);color:#fff;}.btn-primary:hover{opacity:.9;}
+.btn-danger{background:var(--red);color:#fff;}.btn-danger:hover{opacity:.9;}
+.btn-sm{padding:4px 10px;font-size:11px;}
+.btn-outline{background:transparent;border:1px solid var(--border);color:var(--text-dim);}.btn-outline:hover{border-color:var(--accent);color:var(--accent);}
+.toolbar{display:flex;gap:8px;margin-bottom:16px;align-items:center;}
+.modal-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);z-index:100;justify-content:center;align-items:center;}
+.modal-overlay.show{display:flex;}
+.modal{background:var(--surface);border-radius:16px;padding:24px;width:420px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,.2);}
+.modal h3{font-size:16px;margin-bottom:16px;}
+.form-group{margin-bottom:12px;}
+.form-group label{display:block;font-size:12px;color:var(--text-dim);margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px;}
+.form-group input,.form-group select{width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;outline:none;}
+.form-group input:focus,.form-group select:focus{border-color:var(--accent);}
+.form-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;}
+.powered{text-align:center;padding:20px;color:var(--text-dim);font-size:11px;}.powered strong{color:var(--accent);}
 </style>
 </head>
 <body>
@@ -51,156 +57,237 @@ tr:hover td{background:var(--accent-light);}
     <a href="#" class="active" data-page="dashboard">Dashboard</a>
     <a href="#" data-page="employees">Employees</a>
     <a href="#" data-page="departments">Departments</a>
-    <a href="#" data-page="attendance">Attendance</a>
     <a href="#" data-page="leaves">Leave Requests</a>
     <a href="#" data-page="payroll">Payroll</a>
   </nav>
   <div class="main">
 
-    <!-- Dashboard -->
     <div class="page active" id="page-dashboard">
       <h2>Dashboard</h2>
       <div class="stats">
-        <div class="stat-card"><div class="label">Employees</div><div class="value" id="stat-employees">-</div><div class="sub">total headcount</div></div>
-        <div class="stat-card"><div class="label">Active</div><div class="value" id="stat-active">-</div><div class="sub">currently active</div></div>
-        <div class="stat-card"><div class="label">Departments</div><div class="value" id="stat-departments">-</div><div class="sub">organizational units</div></div>
-        <div class="stat-card"><div class="label">Monthly Payroll</div><div class="value" id="stat-payroll">-</div><div class="sub">last pay period</div></div>
+        <div class="stat-card"><div class="label">Total Employees</div><div class="value" id="s-emp">-</div></div>
+        <div class="stat-card"><div class="label">Active</div><div class="value" id="s-active">-</div></div>
+        <div class="stat-card"><div class="label">Departments</div><div class="value" id="s-dept">-</div></div>
+        <div class="stat-card"><div class="label">Monthly Payroll</div><div class="value" id="s-pay">-</div></div>
       </div>
-      <div class="section">
-        <div class="section-title">Recent Activity</div>
-        <div id="recent-activity"><em style="color:var(--text-dim)">Loading...</em></div>
-      </div>
-      <div class="powered">Business logic verified by <strong>Z3 SMT solver</strong> &middot; Built with <strong>Nous</strong> &middot; Zero hand-written implementation code in payroll calculation</div>
+      <div class="section"><div class="section-title">Recent Leave Requests</div><div id="dash-leaves"></div></div>
+      <div class="powered">Payroll calculated by <strong>constraint synthesis</strong>: ensure result == (base - deductions) + bonus &middot; <strong>Z3 verified</strong></div>
     </div>
 
-    <!-- Employees -->
     <div class="page" id="page-employees">
       <h2>Employees</h2>
-      <table><thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Dept</th><th>Role</th><th>Status</th><th>Salary</th></tr></thead><tbody id="employee-table"></tbody></table>
+      <div class="toolbar">
+        <button class="btn btn-primary" onclick="showModal('emp-add')">+ Add Employee</button>
+      </div>
+      <table><thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Dept</th><th>Role</th><th>Salary</th><th>Status</th><th>Actions</th></tr></thead><tbody id="t-emp"></tbody></table>
     </div>
 
-    <!-- Departments -->
     <div class="page" id="page-departments">
       <h2>Departments</h2>
-      <table><thead><tr><th>ID</th><th>Name</th><th>Budget</th></tr></thead><tbody id="department-table"></tbody></table>
+      <div class="toolbar">
+        <button class="btn btn-primary" onclick="showModal('dept-add')">+ Add Department</button>
+      </div>
+      <table><thead><tr><th>ID</th><th>Name</th><th>Budget</th></tr></thead><tbody id="t-dept"></tbody></table>
     </div>
 
-    <!-- Attendance -->
-    <div class="page" id="page-attendance">
-      <h2>Attendance</h2>
-      <table><thead><tr><th>ID</th><th>Employee</th><th>Date</th><th>Check In</th><th>Check Out</th></tr></thead><tbody id="attendance-table"></tbody></table>
-    </div>
-
-    <!-- Leaves -->
     <div class="page" id="page-leaves">
       <h2>Leave Requests</h2>
-      <table><thead><tr><th>ID</th><th>Employee</th><th>Type</th><th>Start</th><th>End</th><th>Days</th><th>Status</th><th>Reason</th></tr></thead><tbody id="leave-table"></tbody></table>
+      <div class="toolbar">
+        <button class="btn btn-primary" onclick="showModal('leave-add')">+ New Request</button>
+      </div>
+      <table><thead><tr><th>ID</th><th>Employee</th><th>Type</th><th>Dates</th><th>Days</th><th>Reason</th><th>Status</th><th>Actions</th></tr></thead><tbody id="t-leave"></tbody></table>
     </div>
 
-    <!-- Payroll -->
     <div class="page" id="page-payroll">
       <h2>Payroll</h2>
-      <div class="section" style="margin-bottom:16px;background:var(--accent-light);border-color:var(--accent);">
-        <div class="section-title" style="color:var(--accent);">Constraint-Synthesized Calculation</div>
-        <code style="font-size:12px;color:var(--text-dim);">fn calculate_net_pay(base, deductions, bonus) -> Int<br>&nbsp;&nbsp;ensure result == (base - deductions) + bonus<br><br>No implementation code. Compiler synthesizes from constraint. Z3 verified.</code>
+      <div class="section" style="background:var(--accent-light);border-color:var(--accent);margin-bottom:16px;">
+        <code style="font-size:12px;color:var(--text);">fn calculate_net_pay(base, deductions, bonus) -> Int<br>&nbsp;&nbsp;ensure result == (base - deductions) + bonus<br><span style="color:var(--accent);">// Zero implementation code. Compiler synthesizes from constraint.</span></code>
       </div>
-      <table><thead><tr><th>Employee</th><th>Period</th><th>Base</th><th>Deductions</th><th>Bonus</th><th>Net Pay</th></tr></thead><tbody id="payroll-table"></tbody></table>
+      <table><thead><tr><th>Employee</th><th>Period</th><th>Base</th><th>Deductions</th><th>Bonus</th><th>Net Pay</th></tr></thead><tbody id="t-pay"></tbody></table>
     </div>
-
   </div>
 </div>
-<script>
-const Q = (s) => document.querySelector(s);
-const QA = (s) => document.querySelectorAll(s);
-const API = '/api';
 
-// Navigation
-QA('nav a').forEach(a => a.addEventListener('click', e => {
+<!-- Modals -->
+<div class="modal-overlay" id="emp-add">
+  <div class="modal">
+    <h3>Add Employee</h3>
+    <div class="form-group"><label>Name</label><input id="f-emp-name"></div>
+    <div class="form-group"><label>Email</label><input id="f-emp-email" type="email"></div>
+    <div class="form-group"><label>Department ID</label><input id="f-emp-dept" type="number" value="1"></div>
+    <div class="form-group"><label>Role</label><input id="f-emp-role" value="staff"></div>
+    <div class="form-group"><label>Salary</label><input id="f-emp-salary" type="number" value="10000"></div>
+    <div class="form-actions">
+      <button class="btn btn-outline" onclick="hideModals()">Cancel</button>
+      <button class="btn btn-primary" onclick="addEmployee()">Add</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="emp-edit">
+  <div class="modal">
+    <h3>Edit Employee</h3>
+    <input type="hidden" id="f-edit-id">
+    <div class="form-group"><label>Name</label><input id="f-edit-name"></div>
+    <div class="form-group"><label>Email</label><input id="f-edit-email"></div>
+    <div class="form-group"><label>Role</label><input id="f-edit-role"></div>
+    <div class="form-group"><label>Salary</label><input id="f-edit-salary" type="number"></div>
+    <div class="form-group"><label>Status</label>
+      <select id="f-edit-status"><option>active</option><option>suspended</option><option>terminated</option><option>onboarding</option></select>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-outline" onclick="hideModals()">Cancel</button>
+      <button class="btn btn-primary" onclick="updateEmployee()">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="dept-add">
+  <div class="modal">
+    <h3>Add Department</h3>
+    <div class="form-group"><label>Name</label><input id="f-dept-name"></div>
+    <div class="form-group"><label>Budget</label><input id="f-dept-budget" type="number" value="100000"></div>
+    <div class="form-actions">
+      <button class="btn btn-outline" onclick="hideModals()">Cancel</button>
+      <button class="btn btn-primary" onclick="addDepartment()">Add</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="leave-add">
+  <div class="modal">
+    <h3>New Leave Request</h3>
+    <div class="form-group"><label>Employee ID</label><input id="f-leave-emp" type="number"></div>
+    <div class="form-group"><label>Type</label>
+      <select id="f-leave-type"><option>annual</option><option>sick</option><option>personal</option><option>parental</option></select>
+    </div>
+    <div class="form-group"><label>Start Date</label><input id="f-leave-start" type="date"></div>
+    <div class="form-group"><label>End Date</label><input id="f-leave-end" type="date"></div>
+    <div class="form-group"><label>Days</label><input id="f-leave-days" type="number" value="1"></div>
+    <div class="form-group"><label>Reason</label><input id="f-leave-reason"></div>
+    <div class="form-actions">
+      <button class="btn btn-outline" onclick="hideModals()">Cancel</button>
+      <button class="btn btn-primary" onclick="addLeave()">Submit</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API='/api';
+const Q=s=>document.querySelector(s);
+const $=id=>document.getElementById(id);
+let employees=[],departments=[],leaves=[],payroll=[];
+
+// Nav
+document.querySelectorAll('nav a').forEach(a=>a.addEventListener('click',e=>{
   e.preventDefault();
-  QA('nav a').forEach(x => x.classList.remove('active'));
-  QA('.page').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('nav a').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));
   a.classList.add('active');
-  Q('#page-' + a.dataset.page).classList.add('active');
+  $('page-'+a.dataset.page).classList.add('active');
 }));
 
-async function fetchJSON(path) {
-  try { const r = await fetch(API + path); return await r.json(); }
-  catch(e) { return []; }
-}
+function badge(s){return `<span class="badge ${s}">${s}</span>`;}
+function money(n){return '¥'+parseInt(n||0).toLocaleString();}
+function showModal(id){$(id).classList.add('show');}
+function hideModals(){document.querySelectorAll('.modal-overlay').forEach(m=>m.classList.remove('show'));}
 
-function badge(status) {
-  return `<span class="badge ${status}">${status}</span>`;
-}
-
-function money(n) {
-  return '¥' + parseInt(n || 0).toLocaleString();
-}
-
-async function loadDashboard() {
-  const [emps, depts, payroll, leaves] = await Promise.all([
-    fetchJSON('/employees'), fetchJSON('/departments'),
-    fetchJSON('/payroll'), fetchJSON('/leaves')
+// ── Fetch ────────────────────────
+async function load(){
+  [employees,departments,leaves,payroll]=await Promise.all([
+    fetch(API+'/employees').then(r=>r.json()).catch(()=>[]),
+    fetch(API+'/departments').then(r=>r.json()).catch(()=>[]),
+    fetch(API+'/leaves').then(r=>r.json()).catch(()=>[]),
+    fetch(API+'/payroll').then(r=>r.json()).catch(()=>[]),
   ]);
-  Q('#stat-employees').textContent = emps.length;
-  Q('#stat-active').textContent = emps.filter(e => e.status === 'active').length;
-  Q('#stat-departments').textContent = depts.length;
-  const totalPay = payroll.reduce((s, p) => s + parseInt(p.net_pay || 0), 0);
-  Q('#stat-payroll').textContent = money(totalPay);
-
-  let activity = '';
-  leaves.slice(0, 5).forEach(l => {
-    activity += `<div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:13px;">Employee #${l.employee_id}: ${l.leave_type} leave (${l.days} days) — ${badge(l.status)}</div>`;
-  });
-  payroll.slice(0, 3).forEach(p => {
-    activity += `<div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:13px;">Payroll #${p.employee_id} for ${p.period}: ${money(p.net_pay)} net</div>`;
-  });
-  Q('#recent-activity').innerHTML = activity || '<em>No recent activity</em>';
+  renderAll();
 }
 
-async function loadEmployees() {
-  const data = await fetchJSON('/employees');
-  Q('#employee-table').innerHTML = data.map(e => `<tr>
-    <td>${e.id}</td><td>${e.name}</td><td>${e.email}</td>
-    <td>${e.department_id}</td><td>${e.role}</td>
-    <td>${badge(e.status)}</td><td>${money(e.salary)}</td>
+function renderAll(){
+  // Dashboard
+  $('s-emp').textContent=employees.length;
+  $('s-active').textContent=employees.filter(e=>e.status==='active').length;
+  $('s-dept').textContent=departments.length;
+  $('s-pay').textContent=money(payroll.reduce((s,p)=>s+parseInt(p.net_pay||0),0));
+  $('dash-leaves').innerHTML=leaves.slice(0,5).map(l=>`<div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:13px;">
+    <strong>#${l.employee_id}</strong> ${l.leave_type} (${l.days}d) ${badge(l.status)} <span style="color:var(--text-dim)">${l.reason||''}</span>
+  </div>`).join('')||'<em style="color:var(--text-dim)">No leave requests</em>';
+
+  // Employees
+  $('t-emp').innerHTML=employees.map(e=>`<tr>
+    <td>${e.id}</td><td>${e.name}</td><td>${e.email}</td><td>${e.department_id}</td>
+    <td>${e.role}</td><td>${money(e.salary)}</td><td>${badge(e.status)}</td>
+    <td>
+      <button class="btn btn-sm btn-outline" onclick='editEmployee(${JSON.stringify(e)})'>Edit</button>
+      <button class="btn btn-sm btn-danger" onclick="deleteEmployee(${e.id})">Delete</button>
+    </td>
   </tr>`).join('');
-}
 
-async function loadDepartments() {
-  const data = await fetchJSON('/departments');
-  Q('#department-table').innerHTML = data.map(d => `<tr>
-    <td>${d.id}</td><td>${d.name}</td><td>${money(d.budget)}</td>
-  </tr>`).join('');
-}
+  // Departments
+  $('t-dept').innerHTML=departments.map(d=>`<tr><td>${d.id}</td><td>${d.name}</td><td>${money(d.budget)}</td></tr>`).join('');
 
-async function loadAttendance() {
-  const data = await fetchJSON('/attendance');
-  Q('#attendance-table').innerHTML = data.length ? data.map(a => `<tr>
-    <td>${a.id}</td><td>#${a.employee_id}</td><td>${a.date}</td>
-    <td>${a.check_in || '-'}</td><td>${a.check_out || '-'}</td>
-  </tr>`).join('') : '<tr><td colspan="5" style="text-align:center;color:var(--text-dim)">No records</td></tr>';
-}
-
-async function loadLeaves() {
-  const data = await fetchJSON('/leaves');
-  Q('#leave-table').innerHTML = data.map(l => `<tr>
+  // Leaves
+  $('t-leave').innerHTML=leaves.map(l=>`<tr>
     <td>${l.id}</td><td>#${l.employee_id}</td><td>${l.leave_type}</td>
-    <td>${l.start_date}</td><td>${l.end_date}</td><td>${l.days}</td>
-    <td>${badge(l.status)}</td><td>${l.reason || ''}</td>
+    <td>${l.start_date} ~ ${l.end_date}</td><td>${l.days}</td><td>${l.reason||'-'}</td>
+    <td>${badge(l.status)}</td>
+    <td>${l.status==='pending'?`<button class="btn btn-sm btn-primary" onclick="updateLeave(${l.id},'approved')">Approve</button> <button class="btn btn-sm btn-danger" onclick="updateLeave(${l.id},'rejected')">Reject</button>`:''}</td>
+  </tr>`).join('');
+
+  // Payroll
+  $('t-pay').innerHTML=payroll.map(p=>`<tr>
+    <td>#${p.employee_id}</td><td>${p.period}</td><td>${money(p.base_salary)}</td>
+    <td>${money(p.deductions)}</td><td>${money(p.bonus)}</td><td><strong>${money(p.net_pay)}</strong></td>
   </tr>`).join('');
 }
 
-async function loadPayroll() {
-  const data = await fetchJSON('/payroll');
-  Q('#payroll-table').innerHTML = data.map(p => `<tr>
-    <td>#${p.employee_id}</td><td>${p.period}</td>
-    <td>${money(p.base_salary)}</td><td>${money(p.deductions)}</td>
-    <td>${money(p.bonus)}</td><td><strong>${money(p.net_pay)}</strong></td>
-  </tr>`).join('');
+// ── CRUD ─────────────────────────
+async function addEmployee(){
+  await fetch(API+'/employees',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:$('f-emp-name').value,email:$('f-emp-email').value,
+      department_id:+$('f-emp-dept').value,role:$('f-emp-role').value,salary:+$('f-emp-salary').value})});
+  hideModals();load();
 }
 
-// Load all
-Promise.all([loadDashboard(), loadEmployees(), loadDepartments(), loadAttendance(), loadLeaves(), loadPayroll()]);
+function editEmployee(e){
+  $('f-edit-id').value=e.id;$('f-edit-name').value=e.name;$('f-edit-email').value=e.email;
+  $('f-edit-role').value=e.role;$('f-edit-salary').value=e.salary;$('f-edit-status').value=e.status;
+  showModal('emp-edit');
+}
+
+async function updateEmployee(){
+  await fetch(API+'/employees',{method:'PUT',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({id:+$('f-edit-id').value,name:$('f-edit-name').value,email:$('f-edit-email').value,
+      role:$('f-edit-role').value,salary:+$('f-edit-salary').value,status:$('f-edit-status').value})});
+  hideModals();load();
+}
+
+async function deleteEmployee(id){
+  if(!confirm('Delete employee #'+id+'?'))return;
+  await fetch(API+'/employees',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+  load();
+}
+
+async function addDepartment(){
+  await fetch(API+'/departments',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:$('f-dept-name').value,budget:+$('f-dept-budget').value})});
+  hideModals();load();
+}
+
+async function addLeave(){
+  await fetch(API+'/leaves',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({employee_id:+$('f-leave-emp').value,leave_type:$('f-leave-type').value,
+      start_date:$('f-leave-start').value,end_date:$('f-leave-end').value,
+      days:+$('f-leave-days').value,reason:$('f-leave-reason').value})});
+  hideModals();load();
+}
+
+async function updateLeave(id,status){
+  await fetch(API+'/leaves',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,status})});
+  load();
+}
+
+load();
 </script>
 </body>
 </html>
