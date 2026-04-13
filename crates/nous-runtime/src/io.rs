@@ -406,6 +406,127 @@ fn handle_http_request(
             }
         }
 
+        // ── Auth endpoints ─────────────────────────
+        ("POST", "/api/auth/login") => {
+            if let Ok(j) = serde_json::from_str::<serde_json::Value>(body) {
+                let email = j.get("email").and_then(|v| v.as_str()).unwrap_or("");
+                let password = j.get("password").and_then(|v| v.as_str()).unwrap_or("");
+                let tenant_id = j.get("tenant_id").and_then(|v| v.as_i64()).unwrap_or(1);
+                if email.is_empty() || password.is_empty() {
+                    return ("400 Bad Request".into(), "application/json".into(), r#"{"error":"email and password required"}"#.into());
+                }
+                if let Ok(conn) = rusqlite::Connection::open(db_path) {
+                    use sha2::{Sha256, Digest as _};
+                    let pw_hash = hex::encode(Sha256::digest(password.as_bytes()));
+                    let mut stmt = conn.prepare("SELECT id, name, role, status FROM users WHERE tenant_id = ?1 AND email = ?2 AND password_hash = ?3").unwrap();
+                    let user: Option<(i64, String, String, String)> = stmt.query_row(
+                        rusqlite::params![tenant_id, email, &pw_hash],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                    ).ok();
+                    match user {
+                        Some((uid, name, role, status)) if status == "active" => {
+                            let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
+                            let token = hex::encode(Sha256::digest(format!("{email}{ts}{pw_hash}").as_bytes()));
+                            let expires = ts + 86400;
+                            conn.execute(
+                                "INSERT INTO sessions (token, user_id, tenant_id, role, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                                rusqlite::params![&token, uid, tenant_id, &role, expires, ts],
+                            ).ok();
+                            conn.execute("UPDATE users SET last_login = ?1 WHERE id = ?2", rusqlite::params![ts, uid]).ok();
+                            conn.execute(
+                                "INSERT INTO audit_log (tenant_id, user_id, action, resource, created_at) VALUES (?1, ?2, 'login', 'auth', ?3)",
+                                rusqlite::params![tenant_id, uid, ts],
+                            ).ok();
+                            let result = serde_json::json!({"ok":true,"token":token,"user":{"id":uid,"name":name,"email":email,"role":role,"tenant_id":tenant_id}});
+                            ("200 OK".into(), "application/json".into(), result.to_string())
+                        }
+                        Some((_, _, _, _)) => ("403 Forbidden".into(), "application/json".into(), r#"{"error":"account disabled"}"#.into()),
+                        None => ("401 Unauthorized".into(), "application/json".into(), r#"{"error":"invalid credentials"}"#.into()),
+                    }
+                } else {
+                    ("500 Internal Server Error".into(), "application/json".into(), r#"{"error":"db"}"#.into())
+                }
+            } else {
+                ("400 Bad Request".into(), "application/json".into(), r#"{"error":"invalid json"}"#.into())
+            }
+        }
+
+        ("POST", "/api/auth/logout") => {
+            if let Ok(j) = serde_json::from_str::<serde_json::Value>(body) {
+                let token = j.get("token").and_then(|v| v.as_str()).unwrap_or("");
+                if let Ok(conn) = rusqlite::Connection::open(db_path) {
+                    conn.execute("DELETE FROM sessions WHERE token = ?1", rusqlite::params![token]).ok();
+                }
+                ("200 OK".into(), "application/json".into(), r#"{"ok":true}"#.into())
+            } else {
+                ("400 Bad Request".into(), "application/json".into(), r#"{"error":"invalid json"}"#.into())
+            }
+        }
+
+        ("GET", "/api/auth/session") => {
+            // Token from query string: /api/auth/session?token=xxx
+            // Or we check a simple approach - parse token from path
+            ("200 OK".into(), "application/json".into(), r#"{"error":"use POST with token"}"#.into())
+        }
+
+        ("POST", "/api/auth/session") => {
+            if let Ok(j) = serde_json::from_str::<serde_json::Value>(body) {
+                let token = j.get("token").and_then(|v| v.as_str()).unwrap_or("");
+                if let Ok(conn) = rusqlite::Connection::open(db_path) {
+                    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
+                    let mut stmt = conn.prepare(
+                        "SELECT s.user_id, s.tenant_id, s.role, u.name, u.email, t.name as tenant_name FROM sessions s JOIN users u ON s.user_id = u.id JOIN tenants t ON s.tenant_id = t.id WHERE s.token = ?1 AND s.expires_at > ?2"
+                    ).unwrap();
+                    let session = stmt.query_row(
+                        rusqlite::params![token, ts],
+                        |row| {
+                            Ok(serde_json::json!({
+                                "user_id": row.get::<_, i64>(0)?,
+                                "tenant_id": row.get::<_, i64>(1)?,
+                                "role": row.get::<_, String>(2)?,
+                                "name": row.get::<_, String>(3)?,
+                                "email": row.get::<_, String>(4)?,
+                                "tenant_name": row.get::<_, String>(5)?
+                            }))
+                        },
+                    );
+                    match session {
+                        Ok(s) => ("200 OK".into(), "application/json".into(), serde_json::json!({"ok":true,"session":s}).to_string()),
+                        Err(_) => ("401 Unauthorized".into(), "application/json".into(), r#"{"error":"invalid or expired session"}"#.into()),
+                    }
+                } else {
+                    ("500 Internal Server Error".into(), "application/json".into(), r#"{"error":"db"}"#.into())
+                }
+            } else {
+                ("400 Bad Request".into(), "application/json".into(), r#"{"error":"invalid json"}"#.into())
+            }
+        }
+
+        ("GET", "/api/tenants") => {
+            let result = query_db(db_path, "SELECT id, name, slug, plan, max_users FROM tenants");
+            ("200 OK".into(), "application/json".into(), result)
+        }
+
+        ("GET", "/api/permissions") => {
+            let result = query_db(db_path, "SELECT role, resource, action FROM permissions ORDER BY role, resource");
+            ("200 OK".into(), "application/json".into(), result)
+        }
+
+        ("GET", "/api/audit_log") => {
+            let result = query_db(db_path, "SELECT tenant_id, user_id, action, resource, resource_id, created_at FROM audit_log ORDER BY created_at DESC LIMIT 50");
+            ("200 OK".into(), "application/json".into(), result)
+        }
+
+        ("GET", "/api/users") => {
+            let result = query_db(db_path, "SELECT id, tenant_id, email, name, role, status, last_login, created_at FROM users ORDER BY id");
+            ("200 OK".into(), "application/json".into(), result)
+        }
+
+        ("GET", "/api/sessions") => {
+            let result = query_db(db_path, "SELECT token, user_id, tenant_id, role, expires_at FROM sessions ORDER BY created_at DESC");
+            ("200 OK".into(), "application/json".into(), result)
+        }
+
         ("GET", "/api/namespaces") => {
             let result = query_db(db_path, "SELECT name, description FROM namespaces");
             ("200 OK".into(), "application/json".into(), result)
