@@ -71,7 +71,7 @@ tr:hover td{background:var(--accent-light);}
         <div class="stat-card"><div class="label">Monthly Payroll</div><div class="value" id="s-pay">-</div></div>
       </div>
       <div class="section"><div class="section-title">Recent Leave Requests</div><div id="dash-leaves"></div></div>
-      <div class="powered">Payroll calculated by <strong>constraint synthesis</strong>: ensure result == (base - deductions) + bonus &middot; <strong>Z3 verified</strong></div>
+      <div class="powered">Powered by <strong>Nous</strong></div>
     </div>
 
     <div class="page" id="page-employees">
@@ -100,8 +100,9 @@ tr:hover td{background:var(--accent-light);}
 
     <div class="page" id="page-payroll">
       <h2>Payroll</h2>
-      <div class="section" style="background:var(--accent-light);border-color:var(--accent);margin-bottom:16px;">
-        <code style="font-size:12px;color:var(--text);">fn calculate_net_pay(base, deductions, bonus) -> Int<br>&nbsp;&nbsp;ensure result == (base - deductions) + bonus<br><span style="color:var(--accent);">// Zero implementation code. Compiler synthesizes from constraint.</span></code>
+      <div class="section" style="margin-bottom:16px;">
+        <div class="section-title">Calculation Rule</div>
+        <div style="font-size:13px;color:var(--text-dim);">Net Pay = Base Salary - Deductions + Bonus</div>
       </div>
       <table><thead><tr><th>Employee</th><th>Period</th><th>Base</th><th>Deductions</th><th>Bonus</th><th>Net Pay</th></tr></thead><tbody id="t-pay"></tbody></table>
     </div>
