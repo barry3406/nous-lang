@@ -1,0 +1,86 @@
+{
+  "name": "Nous",
+  "scopeName": "source.nous",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#string" },
+    { "include": "#number" },
+    { "include": "#keyword" },
+    { "include": "#type" },
+    { "include": "#contract" },
+    { "include": "#effect" },
+    { "include": "#operator" },
+    { "include": "#constant" },
+    { "include": "#function-def" },
+    { "include": "#state-transition" },
+    { "include": "#field" },
+    { "include": "#function-call" }
+  ],
+  "repository": {
+    "comment": {
+      "match": "--.*$",
+      "name": "comment.line.double-dash.nous"
+    },
+    "string": {
+      "begin": "\"",
+      "end": "\"",
+      "name": "string.quoted.double.nous",
+      "patterns": [{ "match": "\\\\.", "name": "constant.character.escape.nous" }]
+    },
+    "number": {
+      "match": "\\b\\d+(\\.\\d+)?\\b",
+      "name": "constant.numeric.nous"
+    },
+    "keyword": {
+      "match": "\\b(fn|flow|entity|enum|state|type|effect|ns|use|let|if|then|else|match|return|step|rollback|transaction|endpoint|handler|main|with|where|and|or|not|implies)\\b",
+      "name": "keyword.control.nous"
+    },
+    "contract": {
+      "match": "\\b(require|ensure|invariant)\\b",
+      "name": "keyword.other.contract.nous",
+      "captures": { "0": { "name": "support.function.contract.nous" } }
+    },
+    "effect": {
+      "match": "\\b(effect)\\b",
+      "name": "keyword.other.effect.nous"
+    },
+    "type": {
+      "match": "\\b(Int|Nat|Bool|Text|Bytes|Dec|Time|Duration|Void|Result|Option|List|Map|Set|Ok|Err)\\b",
+      "name": "support.type.nous"
+    },
+    "constant": {
+      "match": "\\b(true|false|void|nothing|self)\\b",
+      "name": "constant.language.nous"
+    },
+    "operator": {
+      "match": "(->|\\|>|==|/=|<=|>=|<|>|\\+|-|\\*|/|%|\\?|'|\\|)",
+      "name": "keyword.operator.nous"
+    },
+    "function-def": {
+      "match": "\\b(fn|flow)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.control.nous" },
+        "2": { "name": "entity.name.function.nous" }
+      }
+    },
+    "state-transition": {
+      "match": "-\\[([a-zA-Z_][a-zA-Z0-9_]*)\\]->",
+      "captures": {
+        "0": { "name": "keyword.operator.transition.nous" },
+        "1": { "name": "entity.name.tag.nous" }
+      }
+    },
+    "field": {
+      "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*:",
+      "captures": {
+        "1": { "name": "variable.other.property.nous" }
+      }
+    },
+    "function-call": {
+      "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*\\(",
+      "captures": {
+        "1": { "name": "entity.name.function.call.nous" }
+      }
+    }
+  }
+}

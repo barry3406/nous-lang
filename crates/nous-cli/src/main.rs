@@ -1,3 +1,4 @@
+mod lsp;
 mod repl;
 
 use std::path::PathBuf;
@@ -51,6 +52,8 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Start Language Server Protocol server (for VS Code)
+    Lsp,
     /// Start interactive REPL
     Repl {
         /// Output JSON for AI consumption (default: human-friendly)
@@ -69,6 +72,7 @@ fn main() {
         Commands::Emit { file } => cmd_emit(&file),
         Commands::Ast { file } => cmd_ast(&file),
         Commands::Js { file, output } => cmd_js(&file, output.as_deref()),
+        Commands::Lsp => { lsp::run_lsp(); Ok(()) },
         Commands::Repl { json } => { repl::run_repl(json); Ok(()) },
     };
 

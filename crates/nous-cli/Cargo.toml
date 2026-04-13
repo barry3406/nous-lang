@@ -16,4 +16,6 @@ nous-runtime = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+lsp-server = { workspace = true }
+lsp-types = { workspace = true }
 miette = { workspace = true }

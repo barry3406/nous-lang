@@ -37,3 +37,5 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
 hex = "0.4"
 tower-http = { version = "0.6", features = ["cors"] }
+lsp-server = "0.7"
+lsp-types = "0.97"

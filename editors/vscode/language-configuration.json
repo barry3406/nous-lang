@@ -1,0 +1,20 @@
+{
+  "comments": { "lineComment": "--" },
+  "brackets": [["(", ")"], ["[", "]"], ["{", "}"]],
+  "autoClosingPairs": [
+    { "open": "(", "close": ")" },
+    { "open": "[", "close": "]" },
+    { "open": "{", "close": "}" },
+    { "open": "\"", "close": "\"" }
+  ],
+  "surroundingPairs": [
+    ["(", ")"], ["[", "]"], ["{", "}"], ["\"", "\""]
+  ],
+  "indentationRules": {
+    "increaseIndentPattern": "^\\s*(fn|flow|entity|enum|state|main|handler|endpoint|step|if|match|transaction)\\b.*$",
+    "decreaseIndentPattern": "^\\s*(\\}|\\]|\\)).*$"
+  },
+  "folding": {
+    "indentation": true
+  }
+}
