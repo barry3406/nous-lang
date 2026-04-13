@@ -86,11 +86,14 @@ fn read_source(path: &PathBuf) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))
 }
 
-fn cmd_check(path: &PathBuf) -> Result<(), String> {
-    let source = read_source(path)?;
+fn load_file(path: &PathBuf) -> Result<nous_ast::Program, String> {
+    nous_parser::load_program(path)
+        .map_err(|e| format!("load error: {e}"))
+}
 
-    // Phase 0: Parse
-    let program = nous_parser::parse(&source).map_err(|e| format!("parse error: {e}"))?;
+fn cmd_check(path: &PathBuf) -> Result<(), String> {
+    // Phase 0: Parse (with multi-file resolution)
+    let program = load_file(path)?;
 
     // Phase 1: Type check
     let mut checker = nous_types::TypeChecker::new();
@@ -110,8 +113,7 @@ fn cmd_check(path: &PathBuf) -> Result<(), String> {
 }
 
 fn cmd_verify(path: &PathBuf) -> Result<(), String> {
-    let source = read_source(path)?;
-    let program = nous_parser::parse(&source).map_err(|e| format!("parse error: {e}"))?;
+    let program = load_file(path)?;
 
     // Type check first
     let mut checker = nous_types::TypeChecker::new();
@@ -149,8 +151,7 @@ fn cmd_verify(path: &PathBuf) -> Result<(), String> {
 }
 
 fn cmd_run(path: &PathBuf) -> Result<(), String> {
-    let source = read_source(path)?;
-    let program = nous_parser::parse(&source).map_err(|e| format!("parse error: {e}"))?;
+    let program = load_file(path)?;
 
     // Type check
     let mut checker = nous_types::TypeChecker::new();
@@ -175,16 +176,13 @@ fn cmd_run(path: &PathBuf) -> Result<(), String> {
 }
 
 fn cmd_emit(path: &PathBuf) -> Result<(), String> {
-    let source = read_source(path)?;
-
-    // Try to parse and collect all diagnostics
-    let program = match nous_parser::parse(&source) {
+    let program = match load_file(path) {
         Ok(p) => p,
         Err(e) => {
             let diag = serde_json::json!({
                 "level": "error",
                 "phase": "parse",
-                "message": e.to_string(),
+                "message": e,
             });
             println!("{}", serde_json::to_string_pretty(&diag).unwrap());
             return Ok(());
@@ -234,16 +232,14 @@ fn cmd_emit(path: &PathBuf) -> Result<(), String> {
 }
 
 fn cmd_ast(path: &PathBuf) -> Result<(), String> {
-    let source = read_source(path)?;
-    let program = nous_parser::parse(&source).map_err(|e| format!("parse error: {e}"))?;
+    let program = load_file(path)?;
     let json = serde_json::to_string_pretty(&program).map_err(|e| format!("json error: {e}"))?;
     println!("{json}");
     Ok(())
 }
 
 fn cmd_js(path: &PathBuf, output: Option<&std::path::Path>) -> Result<(), String> {
-    let source = read_source(path)?;
-    let program = nous_parser::parse(&source).map_err(|e| format!("parse error: {e}"))?;
+    let program = load_file(path)?;
 
     // Type check first
     let mut checker = nous_types::TypeChecker::new();

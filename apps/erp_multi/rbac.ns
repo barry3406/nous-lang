@@ -1,0 +1,28 @@
+-- RBAC permission model — constraint-synthesized
+
+ns erp.rbac
+
+fn role_to_level(role: Text) -> Int
+  if role == "admin" then 40 else if role == "manager" then 30 else if role == "staff" then 20 else if role == "viewer" then 10 else 0
+
+fn has_permission(user_role_level: Int, required_level: Int) -> Bool
+  require user_role_level >= 0
+  require required_level >= 0
+  ensure result == (user_role_level >= required_level)
+
+fn can_read(role_level: Int) -> Bool
+  ensure result == (role_level >= 10)
+
+fn can_write(role_level: Int) -> Bool
+  ensure result == (role_level >= 20)
+
+fn can_manage(role_level: Int) -> Bool
+  ensure result == (role_level >= 30)
+
+fn can_admin(role_level: Int) -> Bool
+  ensure result == (role_level >= 40)
+
+fn check_tenant_access(user_tenant: Int, resource_tenant: Int) -> Bool
+  require user_tenant > 0
+  require resource_tenant > 0
+  ensure result == (user_tenant == resource_tenant)

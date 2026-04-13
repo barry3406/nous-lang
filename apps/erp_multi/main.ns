@@ -1,0 +1,23 @@
+-- Multi-file ERP entry point
+
+ns erp
+
+use erp.rbac
+use erp.payroll
+
+main with [ProductionHandler]
+  -- Test RBAC (from rbac.ns)
+  let admin_level = role_to_level("admin")
+  let staff_level = role_to_level("staff")
+  println(text_concat("admin level: ", int_to_text(admin_level)))
+  println(text_concat("staff level: ", int_to_text(staff_level)))
+  println(text_concat("admin can_manage: ", to_text(can_manage(admin_level))))
+  println(text_concat("staff can_manage: ", to_text(can_manage(staff_level))))
+  println(text_concat("same tenant: ", to_text(check_tenant_access(1, 1))))
+  println(text_concat("cross tenant: ", to_text(check_tenant_access(1, 2))))
+
+  -- Test Payroll (from payroll.ns)
+  let net = calculate_net_pay(15000, 2500, 3000)
+  println(text_concat("net pay: ", int_to_text(net)))
+
+  net

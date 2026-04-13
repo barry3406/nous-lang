@@ -1,0 +1,9 @@
+-- Payroll — constraint-synthesized calculation
+
+ns erp.payroll
+
+fn calculate_net_pay(base_salary: Int, deductions: Int, bonus: Int) -> Int
+  require base_salary >= 0
+  require deductions >= 0
+  require bonus >= 0
+  ensure result == (base_salary - deductions) + bonus
