@@ -1,0 +1,4 @@
+ns type_mismatch
+
+fn wrong() -> Int
+  "hello"

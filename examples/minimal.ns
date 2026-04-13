@@ -21,4 +21,4 @@ fn greet(person: Person) -> Text
   require person.age >= 0
   effect Log.append
   let msg = "hello"
-  Ok(msg)
+  msg

@@ -1,0 +1,12 @@
+ns constraint_type_mismatch
+
+type BadInt = Int where self + 1
+
+entity Counter
+  value : Int
+  invariant value
+
+fn bad(x: Int) -> Int
+  require x + 1
+  ensure result + 1
+  x

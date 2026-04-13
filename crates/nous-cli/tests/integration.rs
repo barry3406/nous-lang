@@ -3,8 +3,10 @@ use std::process::Command;
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap()  // crates/
-        .parent().unwrap()  // workspace root
+        .parent()
+        .unwrap() // crates/
+        .parent()
+        .unwrap() // workspace root
         .to_path_buf()
 }
 
@@ -52,6 +54,34 @@ fn type_check_catches_unreachable_state() {
     assert!(out.contains("unreachable"));
 }
 
+#[test]
+fn type_check_catches_bad_return_type() {
+    let (ok, out) = run_nous("check", "examples/type_mismatch.ns");
+    assert!(!ok, "should fail: {out}");
+    assert!(out.contains("type mismatch"));
+}
+
+#[test]
+fn type_check_catches_bad_flow_result_type() {
+    let (ok, out) = run_nous("check", "examples/flow_type_mismatch.ns");
+    assert!(!ok, "should fail: {out}");
+    assert!(out.contains("type mismatch"));
+}
+
+#[test]
+fn type_check_catches_non_bool_constraints() {
+    let (ok, out) = run_nous("check", "examples/constraint_type_mismatch.ns");
+    assert!(!ok, "should fail: {out}");
+    assert!(out.contains("expected `Bool`, got `Int`"));
+}
+
+#[test]
+fn type_check_catches_non_bool_flow_contracts() {
+    let (ok, out) = run_nous("check", "examples/flow_constraint_type_mismatch.ns");
+    assert!(!ok, "should fail: {out}");
+    assert!(out.contains("expected `Bool`"));
+}
+
 // ── Verifier tests ───────────────────────────────────
 
 #[test]
@@ -81,14 +111,20 @@ fn verify_banking() {
 fn run_factorial() {
     let (ok, out) = run_nous("run", "examples/runnable.ns");
     assert!(ok, "runnable should execute: {out}");
-    assert!(out.trim() == "120", "factorial(5) should be 120, got: {out}");
+    assert!(
+        out.trim() == "120",
+        "factorial(5) should be 120, got: {out}"
+    );
 }
 
 #[test]
 fn run_contracts() {
     let (ok, out) = run_nous("run", "examples/contracts.ns");
     assert!(ok, "contracts should execute: {out}");
-    assert!(out.trim() == "120", "100/5 + clamp(150,0,100) = 120, got: {out}");
+    assert!(
+        out.trim() == "120",
+        "100/5 + clamp(150,0,100) = 120, got: {out}"
+    );
 }
 
 #[test]
@@ -102,7 +138,10 @@ fn run_contract_violation() {
 fn run_banking() {
     let (ok, out) = run_nous("run", "examples/banking.ns");
     assert!(ok, "banking should execute: {out}");
-    assert!(out.trim() == "1500", "transfer 300 from 1000+500 = 1500, got: {out}");
+    assert!(
+        out.trim() == "1500",
+        "transfer 300 from 1000+500 = 1500, got: {out}"
+    );
 }
 
 #[test]
@@ -123,14 +162,20 @@ fn run_flow_saga() {
 fn run_pipe() {
     let (ok, out) = run_nous("run", "examples/pipe_test.ns");
     assert!(ok, "pipe should execute: {out}");
-    assert!(out.trim() == "110", "5|>double|>square|>add(10) = 110, got: {out}");
+    assert!(
+        out.trim() == "110",
+        "5|>double|>square|>add(10) = 110, got: {out}"
+    );
 }
 
 #[test]
 fn run_ensure() {
     let (ok, out) = run_nous("run", "examples/ensure_test.ns");
     assert!(ok, "ensure should execute: {out}");
-    assert!(out.trim() == "47", "double(21)+safe_abs(5) = 47, got: {out}");
+    assert!(
+        out.trim() == "47",
+        "double(21)+safe_abs(5) = 47, got: {out}"
+    );
 }
 
 #[test]

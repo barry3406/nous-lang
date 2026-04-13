@@ -87,6 +87,9 @@ pub struct TypeEnv {
     /// All type names that are currently valid (builtins + declared types).
     known_types: HashSet<String>,
 
+    /// Type aliases keyed by alias name.
+    aliases: HashMap<String, TypeExpr>,
+
     /// Entity definitions keyed by entity name.
     entities: HashMap<String, EntityDef>,
 
@@ -112,6 +115,7 @@ impl TypeEnv {
         }
         Self {
             known_types,
+            aliases: HashMap::new(),
             entities: HashMap::new(),
             state_machines: HashMap::new(),
             functions: HashMap::new(),
@@ -130,6 +134,18 @@ impl TypeEnv {
     /// Return `true` if `name` refers to a known type (builtin or declared).
     pub fn lookup_type(&self, name: &str) -> bool {
         self.known_types.contains(name)
+    }
+
+    /// Record a type alias definition.
+    pub fn define_type_alias(&mut self, name: impl Into<String>, ty: TypeExpr) {
+        let name = name.into();
+        self.known_types.insert(name.clone());
+        self.aliases.insert(name, ty);
+    }
+
+    /// Retrieve a type alias by name.
+    pub fn lookup_type_alias(&self, name: &str) -> Option<&TypeExpr> {
+        self.aliases.get(name)
     }
 
     // -----------------------------------------------------------------------

@@ -1,0 +1,9 @@
+ns flow_constraint_type_mismatch
+
+flow bad(total: Int) -> Result[Int, Text]
+  require total + 1
+  ensure result + 1
+
+  step emit =
+    Ok(total)?
+    rollback: nothing

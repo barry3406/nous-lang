@@ -1,0 +1,9 @@
+ns flow_type_mismatch
+
+fn load_text() -> Result[Text, Text]
+  Ok("hello")
+
+flow bad_flow() -> Result[Int, Text]
+  step load =
+    load_text()?
+    rollback: nothing
