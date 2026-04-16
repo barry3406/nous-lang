@@ -198,6 +198,7 @@ fn build_state(p: Pair<'_, Rule>) -> Result<Decl, ParseError> {
     let transitions = inner
         .filter(|c| c.as_rule() == Rule::transition)
         .map(|t| {
+            let t_span = mk_span(&t);
             let mut ti = t.into_inner();
             let from = ident_str(&mut ti);
             let action = ident_str(&mut ti);
@@ -216,7 +217,7 @@ fn build_state(p: Pair<'_, Rule>) -> Result<Decl, ParseError> {
                     _ => {}
                 }
             }
-            Ok(Transition { from, action, params, to })
+            Ok(Transition { from, action, params, to, span: t_span })
         })
         .collect::<Result<Vec<_>, ParseError>>()?;
     Ok(Decl::State(StateDecl { name, transitions }))

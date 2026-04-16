@@ -69,6 +69,9 @@ pub struct Transition {
     pub action: String,
     pub params: Vec<Param>,
     pub to: String,
+    /// Source span of this transition (for error reporting).
+    #[serde(default = "crate::span::Span::dummy")]
+    pub span: crate::span::Span,
 }
 
 /// Effect declaration.

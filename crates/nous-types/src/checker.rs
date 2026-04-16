@@ -243,14 +243,21 @@ impl TypeChecker {
         if let Some(init) = initial_state {
             let reachable = reachable_states(init, &transition_defs);
 
+            // Map each state to the first transition that mentions it
+            // (for error-span localization).
+            let mut state_span: HashMap<String, Span> = HashMap::new();
+            for t in &decl.transitions {
+                state_span.entry(t.from.clone()).or_insert(t.span);
+                state_span.entry(t.to.clone()).or_insert(t.span);
+            }
+
             for state in &all_states {
                 if !reachable.contains(state.as_str()) {
-                    // A state exists but cannot be reached from the initial state.
+                    let span = state_span.get(state).copied().unwrap_or_else(Span::dummy);
                     errors.push(TypeError::UnreachableState {
                         state: state.clone(),
                         machine: decl.name.clone(),
-                        // TODO: carry per-state spans from the parser
-                        span: Span::dummy(),
+                        span,
                     });
                 }
             }
