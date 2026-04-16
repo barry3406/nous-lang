@@ -694,13 +694,17 @@ impl TypeChecker {
                     return None;
                 };
 
-                let arg_types = args
+                // Map each arg to its inferred type. If inference fails,
+                // use UNKNOWN_TYPE so the arg still counts — otherwise we
+                // miscount arity on calls whose args contain unknowns.
+                let arg_types: Vec<(TypeExpr, Span)> = args
                     .iter()
-                    .filter_map(|arg| {
-                        self.infer_expr_type(&arg.node, arg.span, scope, errors)
-                            .map(|ty| (ty, arg.span))
+                    .map(|arg| {
+                        let ty = self.infer_expr_type(&arg.node, arg.span, scope, errors)
+                            .unwrap_or_else(|| TypeExpr::Named(UNKNOWN_TYPE.to_string()));
+                        (ty, arg.span)
                     })
-                    .collect::<Vec<_>>();
+                    .collect();
 
                 self.infer_named_call(name, &arg_types, span, errors)
             }
@@ -994,8 +998,26 @@ impl TypeChecker {
             "to_text" | "text_concat" | "int_to_text" | "sha256" => {
                 Some(TypeExpr::Named("Text".to_string()))
             }
-            "text_to_int" | "text_len" | "now_unix" => Some(TypeExpr::Named("Int".to_string())),
-            _ => None,
+            "text_to_int" | "text_len" | "now_unix" | "list_len" => {
+                Some(TypeExpr::Named("Int".to_string()))
+            }
+            // Result-returning I/O builtins — return type depends on context
+            "fs_read" | "fs_write" | "fs_delete" | "http_get" | "http_post"
+            | "db_open" | "db_execute" | "db_query" | "json_stringify"
+            | "json_parse" | "env_get" | "db_insert" | "db_find" | "db_find_one"
+            | "db_update" | "db_delete" | "db_count" | "db_create_table" => {
+                // Result[Unknown, Text] — leave inner unknown so it's compatible
+                Some(TypeExpr::Named(UNKNOWN_TYPE.to_string()))
+            }
+            "fs_exists" => Some(TypeExpr::Named("Bool".to_string())),
+            "http_serve_nous" | "http_serve_static" => Some(TypeExpr::Void),
+            // Nous self-verification: returns a Record but we don't have a
+            // named type for it, so treat as unknown.
+            "nous_verify" => Some(TypeExpr::Named(UNKNOWN_TYPE.to_string())),
+            // Unknown call — don't error cascade; treat as unknown so field
+            // access and argument passing work. This is the sane default for
+            // a language where builtins are plentiful.
+            _ => Some(TypeExpr::Named(UNKNOWN_TYPE.to_string())),
         }
     }
 

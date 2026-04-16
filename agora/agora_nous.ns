@@ -1,0 +1,153 @@
+-- ═══════════════════════════════════════════════════════
+-- Agora, written in Nous.
+-- The Rust layer only handles TCP. Everything else is Nous.
+-- ═══════════════════════════════════════════════════════
+
+ns agora.nous
+
+entity Response
+  status : Int
+  content_type : Text
+  body : Text
+
+-- ── DB Setup ─────────────────────────────────────────
+
+fn init_db(db: Text) -> Result[Text, Text]
+  effect Db.write
+  db_execute(db, "CREATE TABLE IF NOT EXISTS blobs (hash TEXT PRIMARY KEY, content TEXT NOT NULL, created_at INTEGER NOT NULL)")
+  db_execute(db, "CREATE TABLE IF NOT EXISTS namespaces (name TEXT PRIMARY KEY, head_hash TEXT, description TEXT NOT NULL)")
+  db_execute(db, "CREATE TABLE IF NOT EXISTS proposals (id TEXT PRIMARY KEY, namespace TEXT NOT NULL, source TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', submitted_at INTEGER NOT NULL)")
+  db_execute(db, "CREATE TABLE IF NOT EXISTS constraints (id INTEGER PRIMARY KEY AUTOINCREMENT, namespace TEXT NOT NULL, constraint_text TEXT NOT NULL, kind TEXT NOT NULL, added_by_proposal TEXT)")
+  db_execute(db, "CREATE TABLE IF NOT EXISTS chat (id INTEGER PRIMARY KEY AUTOINCREMENT, author TEXT NOT NULL, message TEXT NOT NULL, created_at INTEGER NOT NULL)")
+  Ok(db)
+
+fn seed_db(db: Text) -> Result[Text, Text]
+  effect Db.write
+  db_execute(db, "INSERT OR IGNORE INTO namespaces (name, description) VALUES ('nous.core', 'Core library')")
+  db_execute(db, "INSERT OR IGNORE INTO namespaces (name, description) VALUES ('nous.math', 'Math functions')")
+  Ok("seeded")
+
+-- ── Response helpers ─────────────────────────────────
+
+fn json_response(status: Int, body: Text) -> Response
+  Response(status: status, content_type: "application/json", body: body)
+
+fn ok_json(body: Text) -> Response
+  json_response(200, body)
+
+fn not_found() -> Response
+  json_response(404, "{\"error\":\"not found\"}")
+
+fn static_fallthrough() -> Response
+  Response(status: 0, content_type: "", body: "")
+
+-- ── Route handlers ───────────────────────────────────
+
+fn list_namespaces(db: Text) -> Response
+  effect Db.read
+  let result = db_query(db, "SELECT name, description FROM namespaces")
+  match result
+    Ok(rows) -> ok_json(to_text(rows))
+    Err(e) -> json_response(500, e)
+
+fn list_proposals(db: Text) -> Response
+  effect Db.read
+  let result = db_query(db, "SELECT id, namespace, status, submitted_at FROM proposals ORDER BY submitted_at DESC LIMIT 50")
+  match result
+    Ok(rows) -> ok_json(to_text(rows))
+    Err(e) -> json_response(500, e)
+
+fn list_constraints(db: Text) -> Response
+  effect Db.read
+  let result = db_query(db, "SELECT namespace, constraint_text, kind, added_by_proposal FROM constraints")
+  match result
+    Ok(rows) -> ok_json(to_text(rows))
+    Err(e) -> json_response(500, e)
+
+fn list_chat(db: Text) -> Response
+  effect Db.read
+  let result = db_query(db, "SELECT id, author, message, created_at FROM chat ORDER BY created_at DESC LIMIT 100")
+  match result
+    Ok(rows) -> ok_json(to_text(rows))
+    Err(e) -> json_response(500, e)
+
+fn submit_proposal(db: Text, body: Text) -> Response
+  effect Db.write
+  let parsed = json_parse(body)
+  match parsed
+    Ok(obj) -> verify_and_merge(db, obj.namespace, obj.source)
+    Err(msg) -> json_response(400, "invalid json")
+
+fn verify_and_merge(db: Text, namespace: Text, source: Text) -> Response
+  effect Db.write
+  let ts = int_to_text(now_unix())
+  let id = sha256(text_concat(namespace, text_concat(source, ts)))
+  let result = nous_verify(source)
+  if result.passed then record_merged(db, id, namespace, source, ts, result.verified) else record_rejected(db, id, namespace, source, ts, result.errors)
+
+fn record_merged(db: Text, id: Text, namespace: Text, source: Text, ts: Text, verified: Int) -> Response
+  effect Db.write
+  let sql = text_concat("INSERT INTO proposals (id, namespace, source, status, submitted_at) VALUES ('", text_concat(id, text_concat("', '", text_concat(namespace, text_concat("', '", text_concat(source, text_concat("', 'merged', ", text_concat(ts, ")"))))))))
+  db_execute(db, sql)
+  let blob_hash = sha256(source)
+  db_execute(db, text_concat("INSERT OR IGNORE INTO blobs (hash, content, created_at) VALUES ('", text_concat(blob_hash, text_concat("', '", text_concat(source, text_concat("', ", text_concat(ts, ")")))))))
+  let msg_body = text_concat("{\"ok\":true,\"status\":\"merged\",\"id\":\"", text_concat(id, text_concat("\",\"verified\":", text_concat(int_to_text(verified), "}"))))
+  ok_json(msg_body)
+
+fn record_rejected(db: Text, id: Text, namespace: Text, source: Text, ts: Text, error: Text) -> Response
+  effect Db.write
+  let sql = text_concat("INSERT INTO proposals (id, namespace, source, status, submitted_at) VALUES ('", text_concat(id, text_concat("', '", text_concat(namespace, text_concat("', '", text_concat(source, text_concat("', 'rejected', ", text_concat(ts, ")"))))))))
+  db_execute(db, sql)
+  let body = text_concat("{\"ok\":false,\"status\":\"rejected\",\"id\":\"", text_concat(id, "\"}"))
+  ok_json(body)
+
+fn post_chat(db: Text, body: Text) -> Response
+  effect Db.write
+  let parsed = json_parse(body)
+  match parsed
+    Ok(obj) -> insert_chat(db, obj.author, obj.message)
+    Err(msg) -> json_response(400, "invalid json")
+
+fn insert_chat(db: Text, author: Text, message: Text) -> Response
+  effect Db.write
+  let ts = int_to_text(now_unix())
+  let sql = text_concat("INSERT INTO chat (author, message, created_at) VALUES ('", text_concat(author, text_concat("', '", text_concat(message, text_concat("', ", text_concat(ts, ")"))))))
+  db_execute(db, sql)
+  ok_json("{\"ok\":true}")
+
+-- ── Main router ──────────────────────────────────────
+
+fn handle(method: Text, path: Text, body: Text) -> Response
+  effect Db.read, Db.write
+  let db = "/tmp/agora_nous.db"
+  if method == "GET" then route_get(db, path) else route_post(db, path, body)
+
+fn route_get(db: Text, path: Text) -> Response
+  effect Db.read
+  if path == "/api/namespaces" then list_namespaces(db)
+  else if path == "/api/proposals" then list_proposals(db)
+  else if path == "/api/constraints" then list_constraints(db)
+  else if path == "/api/chat" then list_chat(db)
+  else static_fallthrough()
+
+fn route_post(db: Text, path: Text, body: Text) -> Response
+  effect Db.write
+  if path == "/api/proposals" then submit_proposal(db, body)
+  else if path == "/api/chat" then post_chat(db, body)
+  else json_response(405, "{\"error\":\"method not allowed\"}")
+
+-- ── Boot ─────────────────────────────────────────────
+
+main with [ProductionHandler]
+  let db = "/tmp/agora_nous.db"
+  println("Agora-in-Nous initializing...")
+  init_db(db)?
+  seed_db(db)?
+  println("[ok] database ready")
+  println("")
+  println("All routing logic is now in Nous.")
+  println("Rust only handles TCP.")
+  println("")
+  println("Serving on http://localhost:8889")
+  http_serve_nous(8889, "handle", "agora/web")
+  0

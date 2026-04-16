@@ -702,7 +702,27 @@ fn build_expr(p: Pair<'_, Rule>) -> Result<Expr, ParseError> {
         Rule::decimal_lit => Ok(Expr::DecLit(p.as_str().to_string())),
         Rule::string_lit => {
             let s = p.as_str();
-            Ok(Expr::StringLit(s[1..s.len()-1].to_string()))
+            let inner = &s[1..s.len()-1];
+            // Process escape sequences
+            let mut result = String::with_capacity(inner.len());
+            let mut chars = inner.chars();
+            while let Some(c) = chars.next() {
+                if c == '\\' {
+                    match chars.next() {
+                        Some('n') => result.push('\n'),
+                        Some('t') => result.push('\t'),
+                        Some('r') => result.push('\r'),
+                        Some('\\') => result.push('\\'),
+                        Some('"') => result.push('"'),
+                        Some('\'') => result.push('\''),
+                        Some(other) => { result.push('\\'); result.push(other); }
+                        None => result.push('\\'),
+                    }
+                } else {
+                    result.push(c);
+                }
+            }
+            Ok(Expr::StringLit(result))
         }
         Rule::bool_lit => Ok(Expr::BoolLit(p.as_str() == "true")),
         Rule::void_lit | Rule::nothing_lit => Ok(Expr::Void),

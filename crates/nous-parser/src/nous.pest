@@ -218,7 +218,8 @@ primary_expr = {
 // Literals
 integer_lit = @{ ASCII_DIGIT+ }
 decimal_lit = @{ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
-string_lit  = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+string_lit  = @{ "\"" ~ (escape | !("\"" | "\\") ~ ANY)* ~ "\"" }
+escape      = @{ "\\" ~ ANY }
 bool_lit    = { "true" | "false" }
 void_lit    = { "void" }
 self_ref    = { "self" }
