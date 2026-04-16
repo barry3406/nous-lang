@@ -76,6 +76,10 @@ pub enum Op {
     MakeList(usize),
     /// Pop `n` values, push a `Tuple`.
     MakeTuple(usize),
+    /// Pop a tuple, push its `i`-th element.
+    TupleIndex(usize),
+    /// Pop an `Enum { fields }`, push its `i`-th field.
+    EnumField(usize),
     /// Pop a value, wrap it in `Value::Ok(...)`.
     WrapOk,
     /// Pop a value, wrap it in `Value::Err(...)`.

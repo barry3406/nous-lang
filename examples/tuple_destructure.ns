@@ -1,0 +1,11 @@
+-- Test tuple destructuring in match patterns
+
+ns tuple_test
+
+fn pair_sum(p: Int) -> Int
+  let t = (10, 20, 30)
+  match t
+    (a, b, c) -> a + b + c
+
+main with [P]
+  pair_sum(0)

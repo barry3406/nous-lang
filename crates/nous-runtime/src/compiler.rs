@@ -1067,15 +1067,10 @@ impl CompilerCtx {
                         // For now we support only zero-field constructors and
                         // single-field bindings via a wildcard / ident.
                         for (i, sub_pat) in fields.iter().enumerate() {
-                            // Use a synthetic temp name to hold the i-th field.
+                            // Extract the i-th enum field value and bind it.
                             let field_slot = scope.define(&format!("_enum_field_{i}"));
-                            // We can't index into Enum fields without a new op.
-                            // Emit a Nop as placeholder and store Void; the
-                            // binding will be Void which is semantically wrong
-                            // but lets the bytecode remain valid.
-                            // TODO: add Op::TupleIndex(usize) / Op::EnumField(usize).
-                            let void_idx = chunk.add_constant(Value::Void);
-                            chunk.emit(Op::LoadConst(void_idx));
+                            chunk.emit(Op::LoadLocal(scrutinee_slot));
+                            chunk.emit(Op::EnumField(i));
                             chunk.emit(Op::StoreLocal(field_slot));
                             chunk.local_count = scope.next_slot;
                             self.emit_pattern_bindings(
@@ -1089,18 +1084,14 @@ impl CompilerCtx {
                 }
             }
             Pattern::Tuple(sub_patterns) => {
-                // The tuple was saved in a temp local by emit_pattern_test.
-                // We resolve it by name convention.
+                // Extract each element via TupleIndex.
                 let tuple_slot = scope
                     .resolve("_tuple_scrutinee")
                     .unwrap_or(scrutinee_slot);
                 for (i, sub_pat) in sub_patterns.iter().enumerate() {
                     let elem_slot = scope.define(&format!("_tuple_elem_{i}"));
-                    // Without TupleIndex we can't extract. Same limitation as
-                    // enum fields — store Void and bind sub-patterns.
-                    // TODO: add Op::TupleIndex(usize).
-                    let void_idx = chunk.add_constant(Value::Void);
-                    chunk.emit(Op::LoadConst(void_idx));
+                    chunk.emit(Op::LoadLocal(tuple_slot));
+                    chunk.emit(Op::TupleIndex(i));
                     chunk.emit(Op::StoreLocal(elem_slot));
                     chunk.local_count = scope.next_slot;
                     self.emit_pattern_bindings(chunk, scope, &sub_pat.node, elem_slot)?;

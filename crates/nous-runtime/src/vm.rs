@@ -520,6 +520,48 @@ impl Vm {
                 self.stack.push(Value::Tuple(items));
             }
 
+            Op::TupleIndex(i) => {
+                let val = self.pop(&chunk_name, ip_before)?;
+                match val {
+                    Value::Tuple(items) => {
+                        let element = items.get(i).cloned().ok_or_else(|| {
+                            RuntimeError::TypeMismatch {
+                                expected: format!("tuple with index {i}"),
+                                got: format!("tuple of length {}", items.len()),
+                            }
+                        })?;
+                        self.stack.push(element);
+                    }
+                    other => {
+                        return Err(RuntimeError::TypeMismatch {
+                            expected: "Tuple".into(),
+                            got: other.type_name().into(),
+                        });
+                    }
+                }
+            }
+
+            Op::EnumField(i) => {
+                let val = self.pop(&chunk_name, ip_before)?;
+                match val {
+                    Value::Enum { fields, .. } => {
+                        let element = fields.get(i).cloned().ok_or_else(|| {
+                            RuntimeError::TypeMismatch {
+                                expected: format!("enum variant with {} fields", i + 1),
+                                got: format!("variant with {} fields", fields.len()),
+                            }
+                        })?;
+                        self.stack.push(element);
+                    }
+                    other => {
+                        return Err(RuntimeError::TypeMismatch {
+                            expected: "Enum".into(),
+                            got: other.type_name().into(),
+                        });
+                    }
+                }
+            }
+
             Op::WrapOk => {
                 let val = self.pop(&chunk_name, ip_before)?;
                 self.stack.push(Value::Ok(Box::new(val)));
