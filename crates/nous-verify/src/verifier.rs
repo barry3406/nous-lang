@@ -73,8 +73,18 @@ impl Verifier {
         mut self,
         program: &Program,
     ) -> Result<VerifyResult, Vec<VerifyError>> {
+        // Phase 1: per-declaration checks
         for spanned in &program.declarations {
             self.visit_decl(&spanned.node, spanned.span);
+        }
+
+        // Phase 2: trust propagation across the call graph
+        let trust_analysis = crate::trust::analyze(program);
+        for (fn_name, declared, effective, witness) in &trust_analysis.downgraded {
+            self.warnings.push(format!(
+                "TRUST DOWNGRADE: `{fn_name}` declared {declared:?} but effective trust is {effective:?} \
+                (because it calls `{witness}` which is not {declared:?})"
+            ));
         }
 
         if self.errors.is_empty() {

@@ -69,6 +69,8 @@ pub struct FnSig {
     pub return_type: TypeExpr,
     /// Effects declared in the contract.
     pub effects: Vec<String>,
+    /// Declared trust level. Will be downgraded if callees have lower trust.
+    pub declared_trust: nous_ast::decl::TrustLevel,
 }
 
 // ---------------------------------------------------------------------------

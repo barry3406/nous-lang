@@ -147,6 +147,7 @@ impl TypeChecker {
                             .collect(),
                         return_type: decl.return_type.node.clone(),
                         effects: decl.contract.effects.clone(),
+                        declared_trust: decl.contract.trust.clone(),
                     });
                 }
                 Decl::Flow(decl) => {
@@ -162,6 +163,7 @@ impl TypeChecker {
                             .collect(),
                         return_type: decl.return_type.node.clone(),
                         effects: decl.contract.effects.clone(),
+                        declared_trust: decl.contract.trust.clone(),
                     });
                 }
                 _ => {}
@@ -315,6 +317,7 @@ impl TypeChecker {
             params: param_defs,
             return_type: decl.return_type.node.clone(),
             effects: decl.contract.effects.clone(),
+            declared_trust: decl.contract.trust.clone(),
         };
         self.env.define_fn(sig);
     }
@@ -392,6 +395,7 @@ impl TypeChecker {
             params: param_defs,
             return_type: decl.return_type.node.clone(),
             effects: decl.contract.effects.clone(),
+            declared_trust: decl.contract.trust.clone(),
         };
         self.env.define_fn(sig);
     }

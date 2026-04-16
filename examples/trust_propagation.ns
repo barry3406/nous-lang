@@ -1,0 +1,31 @@
+-- ═══════════════════════════════════════════════════════
+-- Trust Propagation Test
+--
+-- `claim_proved` declares trust proved but calls observed function.
+-- Verifier should detect this and DOWNGRADE claim_proved to observed.
+-- Trust without propagation would be a lie.
+-- ═══════════════════════════════════════════════════════
+
+ns trust_test
+
+-- Pure math: legitimately proved
+fn add(a: Int, b: Int) -> Int
+  trust proved
+  ensure proved result == a + b
+
+-- External call: only observed
+fn fetch_from_api() -> Int
+  trust observed
+  effect Http.request
+  42
+
+-- Problem: declares proved but depends on observed function
+-- Verifier must catch this
+fn claim_proved(x: Int) -> Int
+  trust proved
+  effect Http.request
+  let external = fetch_from_api()
+  add(x, external)
+
+main with [ProductionHandler]
+  claim_proved(10)
