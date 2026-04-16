@@ -4,14 +4,33 @@
 //! in pure Nous. They are the "effect handlers" — Rust implementations
 //! bound to Nous function signatures.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::Write;
+use std::sync::Mutex;
 
 use crate::value::Value;
 use crate::error::RuntimeError;
+use crate::bytecode::Module;
 
 /// A native function takes a list of arguments and returns a Value.
 pub type NativeFn = fn(&[Value]) -> Result<Value, RuntimeError>;
+
+// ── Module stash (for builtins that re-enter the VM) ───
+// The current executing module, set at the start of Vm::execute.
+// Used by http_serve_nous to dispatch requests to Nous handlers.
+static CURRENT_MODULE: Mutex<Option<Module>> = Mutex::new(None);
+
+pub fn set_current_module(m: Module) {
+    if let Ok(mut guard) = CURRENT_MODULE.lock() {
+        *guard = Some(m);
+    }
+}
+
+pub fn with_current_module<T>(f: impl FnOnce(&Module) -> T) -> Option<T> {
+    let guard = CURRENT_MODULE.lock().ok()?;
+    guard.as_ref().map(f)
+}
 
 /// Registry of built-in functions.
 pub struct Builtins {

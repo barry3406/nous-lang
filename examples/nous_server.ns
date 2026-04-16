@@ -1,0 +1,25 @@
+-- HTTP server written ENTIRELY IN NOUS.
+
+ns nous_server
+
+entity Response
+  status : Int
+  content_type : Text
+  body : Text
+
+fn handle(method: Text, path: Text, body: Text) -> Response
+  if path == "/api/ping" then
+    Response(status: 200, content_type: "text/plain", body: "pong")
+  else if path == "/api/echo" then
+    Response(status: 200, content_type: "text/plain", body: body)
+  else if path == "/api/hello" then
+    Response(status: 200, content_type: "text/plain", body: "hello from Nous")
+  else if path == "/api/method" then
+    Response(status: 200, content_type: "text/plain", body: method)
+  else
+    Response(status: 404, content_type: "text/plain", body: "not found")
+
+main with [ProductionHandler]
+  println("Nous HTTP server starting on 9000")
+  http_serve_nous(9000, "handle", ".")
+  0

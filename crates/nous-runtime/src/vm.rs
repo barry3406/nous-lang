@@ -71,6 +71,10 @@ impl Vm {
     /// Execute `module` starting from `module.entry`, returning the top-of-stack
     /// value when `Halt` is reached, or the return value from the entry chunk.
     pub fn execute(&mut self, module: &Module) -> Result<Value, RuntimeError> {
+        // Stash a reference to the module for use by builtins that need to
+        // re-enter the VM (e.g. http_serve_nous dispatching to Nous handlers).
+        crate::builtins::set_current_module(module.clone());
+
         let entry = module.entry;
         let entry_chunk = module.chunks.get(entry).ok_or(RuntimeError::UndefinedChunk { index: entry })?;
 
@@ -84,6 +88,49 @@ impl Vm {
 
         loop {
             let result = self.step(module)?;
+            if let Some(v) = result {
+                return Ok(v);
+            }
+        }
+    }
+
+    /// Invoke a named function in the module with arguments, returning the result.
+    /// Used by builtins that need to call back into Nous code (e.g. HTTP handlers).
+    pub fn invoke_fn(
+        module: &Module,
+        fn_name: &str,
+        args: Vec<Value>,
+    ) -> Result<Value, RuntimeError> {
+        // Find the chunk for the named function.
+        let chunk_idx = module.chunks.iter().position(|c| c.name == fn_name)
+            .ok_or_else(|| RuntimeError::Internal {
+                message: format!("function `{fn_name}` not found in module"),
+            })?;
+        let chunk = &module.chunks[chunk_idx];
+
+        let mut vm = Vm::new();
+        let stack_base = 0;
+        let local_count = chunk.local_count;
+
+        // Args go into the first local slots.
+        for arg in args {
+            vm.stack.push(arg);
+        }
+        // Fill remaining locals with Void.
+        while vm.stack.len() < local_count {
+            vm.stack.push(Value::Void);
+        }
+
+        vm.frames.push(CallFrame::new(chunk_idx, stack_base, local_count));
+
+        // Run until this single frame returns.
+        let target_depth = 0;
+        loop {
+            if vm.frames.len() <= target_depth {
+                // Frame popped; return top of stack
+                return Ok(vm.stack.last().cloned().unwrap_or(Value::Void));
+            }
+            let result = vm.step(module)?;
             if let Some(v) = result {
                 return Ok(v);
             }

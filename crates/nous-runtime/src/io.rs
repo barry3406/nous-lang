@@ -15,6 +15,7 @@ use crate::builtins::NativeFn;
 pub fn register_io_builtins(fns: &mut BTreeMap<String, NativeFn>) {
     // ── HTTP Server ──────────────────────────────────
     fns.insert("http_serve_static".into(), builtin_http_serve_static);
+    fns.insert("http_serve_nous".into(), builtin_http_serve_nous);
 
     // ── File system ──────────────────────────────────
     fns.insert("fs_read".into(), builtin_fs_read);
@@ -572,6 +573,133 @@ fn builtin_env_args(_args: &[Value]) -> Result<Value, RuntimeError> {
 ///   POST /api/chat       → store a chat message
 ///   GET /api/chat        → JSON list of chat messages
 ///   GET /*               → serves static file from html_dir
+/// Start an HTTP server that dispatches every request to a Nous function.
+/// Args: (port: Int, handler_fn_name: Text, static_dir: Text)
+///
+/// For each request, calls the Nous function with:
+///   (method: Text, path: Text, body: Text) -> Record{status, content_type, body}
+///
+/// If the Nous handler returns a Record with field `status: 0`, the request
+/// is served from `static_dir` instead (so static files still work).
+fn builtin_http_serve_nous(args: &[Value]) -> Result<Value, RuntimeError> {
+    use std::net::TcpListener;
+    use std::io::{Read, Write, BufRead, BufReader};
+
+    let port = match args.first() {
+        Some(Value::Int(p)) => *p as u16,
+        _ => 8888,
+    };
+    let handler_name = require_text(args, 1, "http_serve_nous")?.to_string();
+    let static_dir = require_text(args, 2, "http_serve_nous")?.to_string();
+
+    let module = match crate::builtins::with_current_module(|m| m.clone()) {
+        Some(m) => m,
+        None => return Ok(Value::Err(Box::new(Value::Text(
+            "no current module — http_serve_nous must be called from running Nous code".into()
+        )))),
+    };
+
+    let addr = format!("0.0.0.0:{port}");
+    let listener = TcpListener::bind(&addr).map_err(|e| RuntimeError::TypeMismatch {
+        expected: "bind address".into(),
+        got: e.to_string(),
+    })?;
+
+    eprintln!("Nous-handled server on http://localhost:{port} (handler: {handler_name})");
+
+    for stream in listener.incoming() {
+        let mut stream = match stream { Ok(s) => s, Err(_) => continue };
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+
+        let mut request_line = String::new();
+        if reader.read_line(&mut request_line).is_err() { continue; }
+        let parts: Vec<&str> = request_line.trim().split_whitespace().collect();
+        if parts.len() < 2 { continue; }
+        let method = parts[0].to_string();
+        let path = parts[1].to_string();
+
+        let mut content_length = 0usize;
+        loop {
+            let mut header = String::new();
+            if reader.read_line(&mut header).is_err() { break; }
+            if header.trim().is_empty() { break; }
+            if header.to_lowercase().starts_with("content-length:") {
+                content_length = header.split(':').nth(1)
+                    .and_then(|v| v.trim().parse().ok()).unwrap_or(0);
+            }
+        }
+
+        let body = if content_length > 0 {
+            let mut buf = vec![0u8; content_length];
+            reader.read_exact(&mut buf).ok();
+            String::from_utf8_lossy(&buf).to_string()
+        } else { String::new() };
+
+        // Dispatch to the Nous handler.
+        let args = vec![
+            Value::Text(method.clone()),
+            Value::Text(path.clone()),
+            Value::Text(body),
+        ];
+        let response = crate::vm::Vm::invoke_fn(&module, &handler_name, args);
+
+        let (status, content_type, response_body) = match response {
+            Ok(Value::Record { fields, .. }) => {
+                let status = match fields.get("status") {
+                    Some(Value::Int(n)) => *n,
+                    _ => 200,
+                };
+                let content_type = match fields.get("content_type") {
+                    Some(Value::Text(s)) => s.clone(),
+                    _ => "application/json".to_string(),
+                };
+                let body = match fields.get("body") {
+                    Some(Value::Text(s)) => s.clone(),
+                    Some(v) => format!("{v}"),
+                    None => String::new(),
+                };
+                (status, content_type, body)
+            }
+            Ok(other) => (200i64, "application/json".to_string(), format!("{other}")),
+            Err(e) => (500i64, "text/plain".to_string(), format!("handler error: {e}")),
+        };
+
+        // Status 0 means "fall through to static files"
+        let (status_line, ct, response_body) = if status == 0 {
+            // Serve static
+            let file_path = if path == "/" {
+                format!("{static_dir}/index.html")
+            } else {
+                format!("{static_dir}{path}")
+            };
+            let ct_guess = if file_path.ends_with(".js") { "application/javascript" }
+                else if file_path.ends_with(".css") { "text/css" }
+                else if file_path.ends_with(".html") { "text/html" }
+                else { "text/plain" };
+            match std::fs::read_to_string(&file_path) {
+                Ok(content) => ("200 OK".to_string(), format!("{ct_guess}; charset=utf-8"), content),
+                Err(_) => ("404 Not Found".to_string(), "text/plain".to_string(), "not found".to_string()),
+            }
+        } else {
+            let status_text = match status {
+                200 => "OK", 201 => "Created", 204 => "No Content",
+                400 => "Bad Request", 401 => "Unauthorized", 403 => "Forbidden",
+                404 => "Not Found", 405 => "Method Not Allowed",
+                500 => "Internal Server Error",
+                _ => "OK",
+            };
+            (format!("{status} {status_text}"), content_type, response_body)
+        };
+
+        let response = format!(
+            "HTTP/1.1 {status_line}\r\nContent-Type: {ct}\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n{}",
+            response_body.len(), response_body
+        );
+        stream.write_all(response.as_bytes()).ok();
+    }
+    Ok(Value::Void)
+}
+
 fn builtin_http_serve_static(args: &[Value]) -> Result<Value, RuntimeError> {
     use std::net::TcpListener;
     use std::io::{Read, Write, BufRead, BufReader};
